@@ -1,0 +1,156 @@
+You are working on an existing ERP + SCM platform built in Replit. Do NOT ask questions about file locations, environment, or setup. Instead, analyze the entire project structure, detect the tech stack, database schema, API routes, and existing modules automatically, then proceed with implementation, completion, and testing.
+
+Your responsibilities are:
+
+1. PROJECT UNDERSTANDING
+
+* Automatically detect:
+
+  * Frontend framework (likely React)
+  * Backend (likely Node.js/Express)
+  * Database (likely PostgreSQL)
+* Map all:
+
+  * API routes
+  * DB tables and relationships
+  * Existing modules (Inventory, Orders, Logistics, etc.)
+* Identify missing or incomplete features.
+
+2. CORE BUSINESS REQUIREMENTS (IMPLEMENT + VALIDATE)
+
+A. Inventory & Sales
+
+* Implement "Saleable Stock" vs "Total Inventory"
+* Restrict Sales users to only saleable stock
+* Implement stock reservation when Sales Order is created (valid for 7 days)
+* Prevent double-selling of reserved inventory
+* Add stock status fields (Available, Reserved, Quarantine)
+
+B. Procurement & Purchase Orders
+
+* Enable Purchase Order creation with image upload support
+* Add procurement type: Local vs Import
+* Store and retrieve PO attachments properly
+
+C. Import & Logistics Workflow (STRICT SEQUENTIAL FLOW)
+Implement status pipeline:
+
+* Proforma Invoice (PI)
+* Advance Payment
+* Container Loading
+* Remaining Payment
+* Unloading & Quality Check
+* Stocking
+
+Rules:
+
+* No stage skipping allowed
+* Each stage must update DB status
+* At "Stocking", enforce mandatory "Shortage & Damage" report input
+
+D. Warehouse Structure
+
+* Implement 3-level hierarchy:
+  Warehouse → Location → Item
+* Ensure all inventory records are mapped correctly
+
+E. GRN (Goods Received Note)
+
+* Auto-generate GRN when inventory is inwarded
+* Only after GRN, stock should be added to available inventory
+
+F. Landing Cost Calculation
+
+* Compute:
+  Landing Cost = purchase + logistics + additional charges
+  Selling Price = Landing Cost + margin %
+* Ensure calculation is automatic and stored
+
+G. Dealer Order Reservation
+
+* When dealer places order with advance payment:
+
+  * Lock stock for 7 days
+  * Move stock to Reserved state
+
+H. Dispatch & Delivery
+
+* Enforce barcode scanning before dispatch
+* Validate loading sequence
+* Require proof of delivery (signature/photo/GPS)
+
+I. Role-Based Access Control
+Ensure proper permissions:
+
+* Super Admin: full access
+* Inventory Manager: stock + QC
+* Sales Manager: orders only
+* Warehouse roles: limited operational access
+* Restrict UI + API based on roles
+
+J. Integrations (simulate if not present)
+
+* Tally:
+
+  * Trigger on GRN and Delivery completion
+* WhatsApp:
+
+  * Trigger on order confirmation
+* SMS (Twilio):
+
+  * Trigger for delivery OTP
+
+3. BACKEND TASKS
+
+* Validate and fix all DB schemas
+* Add missing columns if needed:
+
+  * stock_status
+  * reserved_until
+  * warehouse_id, location_id
+  * logistics_status
+* Ensure all API endpoints follow consistent structure
+* Add validation and error handling
+* Ensure transactional integrity (avoid stock mismatch)
+
+4. FRONTEND TASKS
+
+* Fix UI inconsistencies
+* Ensure all modules are connected to backend APIs
+* Add missing forms:
+
+  * PO with image upload
+  * QC rejection
+  * Damage report
+* Ensure role-based UI rendering
+
+5. TESTING & DEBUGGING (MANDATORY)
+
+* Simulate full workflow:
+  Purchase → GRN → Inventory → Order → Reservation → Dispatch → Delivery
+* Log all failures
+* Fix:
+
+  * broken API calls
+  * incorrect DB updates
+  * UI inconsistencies
+
+6. OUTPUT REQUIRED
+
+* List of:
+
+  * Missing features implemented
+  * Bugs fixed
+  * DB changes made
+  * APIs updated/created
+* Ensure system is production-ready
+
+IMPORTANT RULES:
+
+* Do NOT ask questions
+* Do NOT assume missing files — scan and infer
+* Do NOT break existing working features
+* Extend safely and modularly
+* Keep code clean and consistent with existing structure
+
+Goal: Convert this partially built ERP into a fully functional, production-ready system with correct workflows, data integrity, and role-based access.

@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Adhams ERP Platform"
+version = "1.0.0"
+id = "artifacts/adhams-erp"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 26270
+
+[services.development]
+run = "pnpm --filter @workspace/adhams-erp run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/adhams-erp", "run", "build" ]
+publicDir = "artifacts/adhams-erp/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "26270"
+BASE_PATH = "/"

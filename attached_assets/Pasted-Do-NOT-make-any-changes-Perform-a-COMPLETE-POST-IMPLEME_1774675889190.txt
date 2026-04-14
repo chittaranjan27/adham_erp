@@ -1,0 +1,165 @@
+Do NOT make any changes.
+
+Perform a COMPLETE POST-IMPLEMENTATION AUDIT of the system after recent fixes.
+
+You must VERIFY (not assume) all implementations by checking:
+
+* Backend routes
+* Database schema
+* Frontend pages/components
+* API integrations
+* Role-based access behavior
+
+For EACH feature below, follow STRICTLY:
+
+1. Check if the feature is implemented
+2. Trace the FULL FLOW:
+
+   * Entry point (UI page/route)
+   * API calls (endpoint + method)
+   * Backend logic
+   * Database updates
+3. Verify correctness against requirement
+4. Identify edge cases or hidden bugs
+5. DO NOT fix anything — only audit
+
+---
+
+FEATURES TO VERIFY:
+
+1. SALES INVENTORY VIEW
+
+* Route: /inventory/saleable (or equivalent)
+* Must call: GET /api/inventory?saleable=true
+* Must show ONLY:
+
+  * Product name
+  * Saleable quantity
+  * Selling price
+* Must NOT show:
+
+  * Barcode
+  * GRN
+  * Warehouse/location
+  * Total quantity
+  * Cost fields
+* Must be accessible ONLY to sales_manager
+* Verify route protection (direct URL access blocked for others)
+
+---
+
+2. STOCK RESERVATION EXPIRY
+
+* Check if reservation auto-release exists
+
+Flow:
+
+* reserved_until stored in DB
+* When expired:
+
+  * saleable_quantity restored
+  * reserved_quantity reduced
+
+Verify:
+
+* Is it triggered automatically? (cron / API trigger)
+* When exactly does it run?
+* What happens if multiple reservations expire?
+
+---
+
+3. ORDER UPDATE RESERVATION FIX
+
+* Check PATCH /api/orders/:id
+
+Flow:
+
+* If advancePaid changes from 0 → >0:
+
+  * Stock must be reserved
+
+Verify:
+
+* Does it trigger reservation logic?
+* Does it prevent double reservation?
+* Does it respect available stock?
+
+---
+
+4. INVENTORY STATUS (pending_qc)
+
+* Check if pending_qc exists in:
+
+  * DB
+  * API response
+  * Frontend filter dropdown
+
+Verify:
+
+* Items from import workflow appear as pending_qc
+* Status is visible and filterable
+* Correct color mapping applied
+
+---
+
+5. LANDING COST + SELLING PRICE
+
+* Check Inventory creation UI
+
+Verify:
+
+* Inputs exist:
+
+  * Landing Cost
+  * Margin %
+* Selling price auto-calculated
+
+Backend:
+
+* Values stored correctly in DB
+* No hardcoded values
+
+---
+
+6. RBAC (BACKEND + FRONTEND)
+
+* Check middleware usage
+
+Verify:
+
+* All protected routes require X-Role header
+* Unauthorized requests → 401
+* Forbidden actions → 403
+
+Frontend:
+
+* Role switch updates header
+* Unauthorized pages blocked via routing (not just hidden links)
+
+---
+
+FOR EACH FEATURE RETURN:
+
+* Status: CORRECT / PARTIAL / BROKEN
+* Full flow explanation (UI → API → DB)
+* Route paths
+* APIs used
+* DB fields involved
+* Edge cases / hidden bugs
+
+---
+
+FINAL OUTPUT:
+
+1. Feature-wise report
+2. List of remaining issues (if any)
+3. Confirmation:
+
+   * Whether Phase 1 requirements are fully satisfied or not
+
+IMPORTANT:
+
+* Do NOT modify any code
+* Do NOT assume anything
+* Trace actual implementation
+* Be strict and critical

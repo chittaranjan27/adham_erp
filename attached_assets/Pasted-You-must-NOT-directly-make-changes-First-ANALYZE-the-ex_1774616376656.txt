@@ -1,0 +1,141 @@
+You must NOT directly make changes.
+
+First ANALYZE the existing system completely:
+
+* Detect backend APIs
+* DB schema
+* Frontend pages/routes
+* Existing features and flows
+
+For EACH feature below, follow STRICTLY:
+
+1. Check if feature exists (backend + frontend + DB)
+
+2. If EXISTS:
+
+   * Explain clearly:
+
+     * What it does
+     * Which routes/pages are used
+     * Which APIs are involved
+     * Which DB tables/fields are used
+     * Full flow (step-by-step)
+   * Validate if it matches requirement exactly
+   * If partially incorrect → list gaps ONLY (do not fix yet)
+
+3. If NOT EXISTS:
+
+   * Then implement FULLY (backend + frontend + DB)
+   * Follow exact requirement (no extra features)
+   * Ensure proper routing, validation, and role-based access
+
+---
+
+FEATURES TO VERIFY (PHASE 1 SCOPE ONLY):
+
+1. PURCHASE ORDER (PO)
+
+* Create Local and Import PO
+* Fields: supplier, type, tax, freight, attachment
+* Import PO should auto-create workflow
+* Route: /purchase-orders
+
+2. IMPORT WORKFLOW (6-STAGE PIPELINE)
+
+* Stages:
+  Proforma Invoice → Advance Payment → Container Loading → Remaining Payment → Unloading & QC → Stocking
+* Sequential only (no skipping)
+* Mandatory validation per stage
+* QC requires damage/shortage input
+* Route: /import-workflow/:id
+
+3. GRN (GOODS RECEIVED NOTE)
+
+* Auto-create after final workflow stage
+* Linked to PO
+* Contains damage, shortage, warehouse
+* Stock added ONLY after GRN release
+* Route: /grn
+
+4. INVENTORY SYSTEM
+
+* Fields:
+
+  * Total Quantity
+  * Saleable Quantity
+* Must link with GRN
+* Track stock status:
+  available / reserved / damaged / quarantine
+* Warehouse → Location → Item mapping
+
+5. SALES INVENTORY VIEW
+
+* Sales role should see ONLY saleable stock
+* No GRN / warehouse / internal data
+* Should have simple list:
+  product, available qty, price
+
+6. ORDER & STOCK RESERVATION
+
+* Order creation
+* Advance payment triggers reservation
+* Reserve stock for 7 days
+* Prevent double-selling
+
+7. ROLE-BASED ACCESS CONTROL (RBAC)
+
+* Roles:
+  Super Admin, Admin, Inventory Manager, Warehouse, Sales
+* Each role must have restricted access
+* Sales must NOT see internal inventory data
+
+8. DISPATCH & DELIVERY (BASIC)
+
+* Dispatch creation
+* Barcode scan validation (if exists)
+* Delivery completion with proof (photo/signature if implemented)
+
+9. LANDING COST CALCULATION
+
+* Landing cost = purchase + logistics
+* Selling price = landing cost + margin
+
+---
+
+FOR EACH FEATURE ALSO VERIFY:
+
+* Routing:
+
+  * Page URL exists?
+  * Navigation works?
+
+* Backend:
+
+  * API exists?
+  * Proper validation?
+  * No skipping logic?
+
+* Database:
+
+  * Required fields exist?
+  * Relations correct?
+
+---
+
+IMPORTANT RULES:
+
+* DO NOT modify anything in this step
+* DO NOT fix bugs yet
+* ONLY audit, explain, and list gaps
+
+OUTPUT FORMAT:
+
+For each feature:
+
+* Status: EXISTS / PARTIAL / MISSING
+* Explanation of current implementation
+* Gaps (if any)
+* Required fixes (only mention, do not implement)
+
+Goal:
+Create a complete audit report of Phase 1 features before making any further changes.

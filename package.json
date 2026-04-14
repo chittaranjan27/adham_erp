@@ -1,0 +1,24 @@
+{
+  "name": "workspace",
+  "version": "0.0.0",
+  "license": "MIT",
+  "scripts": {
+    "db:push": "pnpm --filter @workspace/db run push",
+    "dev": "pnpm --filter @workspace/adhams-erp --filter @workspace/api-server --parallel run dev",
+    "dev:frontend": "pnpm --filter @workspace/adhams-erp run dev",
+    "dev:backend": "pnpm --filter @workspace/api-server run dev",
+    "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "build:prod": "NODE_ENV=production PORT=3000 BASE_PATH=/ pnpm --filter @workspace/api-server --filter @workspace/adhams-erp run build && cp -r artifacts/adhams-erp/dist/public artifacts/api-server/dist/public",
+    "start": "node artifacts/api-server/dist/index.mjs",
+    "typecheck:libs": "tsc --build",
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+  },
+  "private": true,
+  "devDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.60.1",
+    "@tailwindcss/oxide-win32-x64-msvc": "^4.2.2",
+    "lightningcss-win32-x64-msvc": "^1.32.0",
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.2"
+  }
+}

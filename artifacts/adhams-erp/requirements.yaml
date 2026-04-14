@@ -1,0 +1,11 @@
+packages:
+  "recharts": "Required for dashboard and finance charts"
+  "framer-motion": "For page transitions and component animations"
+  "date-fns": "For date formatting"
+  "lucide-react": "For UI icons"
+
+images: []
+
+notes:
+  - "Using @workspace/api-client-react for all API hooks"
+  - "Assuming UI components like Card, Button, Table, Dialog exist in @/components/ui/ based on typical shadcn setup"

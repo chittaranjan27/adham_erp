@@ -1,0 +1,81 @@
+import { Router, type IRouter } from "express";
+import healthRouter from "./health";
+import dashboardRouter from "./dashboard";
+import inventoryRouter from "./inventory";
+import productsRouter from "./products";
+import ordersRouter from "./orders";
+import warehousesRouter from "./warehouses";
+import dealersRouter from "./dealers";
+import logisticsRouter from "./logistics";
+import financeRouter from "./finance";
+import usersRouter from "./users";
+import purchaseOrdersRouter from "./purchaseOrders";
+import grnRouter from "./grn";
+import importWorkflowRouter from "./importWorkflow";
+import warehouseLocationsRouter from "./warehouseLocations";
+import tallyRouter from "./tally";
+import { requirePermission } from "../middlewares/rbac";
+
+const router: IRouter = Router();
+
+// ─── Public routes (no role required) ────────────────────────────────────────
+router.use(healthRouter);
+router.use("/dashboard", dashboardRouter);
+router.use("/products", productsRouter);
+router.use("/warehouses", warehousesRouter);
+router.use("/dealers", dealersRouter);
+router.use("/finance", financeRouter);
+router.use("/users", usersRouter);
+router.use("/warehouse-locations", warehouseLocationsRouter);
+router.use("/tally", tallyRouter);
+
+// ─── Protected routes — Step 1: authenticate (any valid role) ─────────────────
+// requirePermission("read") validates that X-Role is present and is a known role.
+// Every valid role has "read", so this acts as a pure authentication gate.
+router.use("/orders",          requirePermission("read"));
+router.use("/inventory",       requirePermission("read"));
+router.use("/grn",             requirePermission("read"));
+router.use("/logistics",       requirePermission("read"));
+router.use("/purchase-orders", requirePermission("read"));
+router.use("/import-workflow", requirePermission("read"));
+
+// ─── Protected routes — Step 2: authorise mutating operations ─────────────────
+// Middleware-only routes (no final handler) run the permission check, then call
+// next() to fall through to the actual router mounted below.
+
+// Orders — create & update require write_orders
+router.post  ("/orders",     requirePermission("write_orders"));
+router.patch ("/orders/:id", requirePermission("write_orders"));
+
+// Inventory — receive inward, update, and QC decision require write_inventory.
+// POST /inventory/qc/:id is three segments deep so it needs its own rule —
+// it would NOT be caught by the two-segment /inventory/:id pattern above.
+router.post  ("/inventory",         requirePermission("write_inventory"));
+router.patch ("/inventory/:id",     requirePermission("write_inventory"));
+router.post  ("/inventory/qc/:id",  requirePermission("write_inventory"));
+
+// GRN — creating a manual GRN requires write_inventory;
+//       releasing stock (the PATCH that sets isReleased) requires approve_grn
+router.post  ("/grn",     requirePermission("write_inventory"));
+router.patch ("/grn/:id", requirePermission("approve_grn"));
+
+// Logistics dispatches — create & update require write_dispatch
+router.post  ("/logistics/dispatches",     requirePermission("write_dispatch"));
+router.patch ("/logistics/dispatches/:id", requirePermission("write_dispatch"));
+
+// Purchase orders — creating requires write_inventory (procurement)
+router.post  ("/purchase-orders",     requirePermission("write_inventory"));
+router.patch ("/purchase-orders/:id", requirePermission("write_inventory"));
+
+// Import workflow stage advance — requires write_inventory
+router.patch ("/import-workflow/:poId/stage/:stageId", requirePermission("write_inventory"));
+
+// ─── Mount actual routers ─────────────────────────────────────────────────────
+router.use("/inventory",       inventoryRouter);
+router.use("/orders",          ordersRouter);
+router.use("/grn",             grnRouter);
+router.use("/logistics",       logisticsRouter);
+router.use("/purchase-orders", purchaseOrdersRouter);
+router.use("/import-workflow", importWorkflowRouter);
+
+export default router;

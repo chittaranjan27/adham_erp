@@ -1,0 +1,1281 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: Adhams ERP & Logistics Platform API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: dashboard
+    description: Dashboard summary data
+  - name: inventory
+    description: Inventory management
+  - name: orders
+    description: Order management
+  - name: warehouses
+    description: Warehouse management
+  - name: logistics
+    description: Logistics and dispatch
+  - name: dealers
+    description: Dealer management
+  - name: products
+    description: Product catalog
+  - name: finance
+    description: Finance and reports
+  - name: users
+    description: User management
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Get dashboard KPI summary
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /dashboard/inventory-trends:
+    get:
+      operationId: getInventoryTrends
+      tags: [dashboard]
+      summary: Get inventory trend data for charts
+      responses:
+        "200":
+          description: Inventory trend data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrendDataPoint"
+
+  /dashboard/revenue-trends:
+    get:
+      operationId: getRevenueTrends
+      tags: [dashboard]
+      summary: Get revenue trend data
+      responses:
+        "200":
+          description: Revenue trend data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrendDataPoint"
+
+  /dashboard/warehouse-stock:
+    get:
+      operationId: getWarehouseStock
+      tags: [dashboard]
+      summary: Get stock distribution across warehouses
+      responses:
+        "200":
+          description: Warehouse stock distribution
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WarehouseStockItem"
+
+  /dashboard/recent-activities:
+    get:
+      operationId: getRecentActivities
+      tags: [dashboard]
+      summary: Get recent platform activities
+      responses:
+        "200":
+          description: Recent activities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Activity"
+
+  /inventory:
+    get:
+      operationId: listInventory
+      tags: [inventory]
+      summary: List inventory items
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [available, reserved, quarantined, in_transit]
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: warehouse_id
+          in: query
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Inventory list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryListResponse"
+    post:
+      operationId: createInventoryItem
+      tags: [inventory]
+      summary: Create inventory item (inward)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInventoryItem"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItem"
+
+  /inventory/{id}:
+    get:
+      operationId: getInventoryItem
+      tags: [inventory]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Inventory item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItem"
+    patch:
+      operationId: updateInventoryItem
+      tags: [inventory]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInventoryItem"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItem"
+
+  /inventory/qc/{id}:
+    post:
+      operationId: processQC
+      tags: [inventory]
+      summary: Process QC pass/fail for inventory
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QCDecision"
+      responses:
+        "200":
+          description: QC processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItem"
+
+  /products:
+    get:
+      operationId: listProducts
+      tags: [products]
+      summary: List products
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Product list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListResponse"
+    post:
+      operationId: createProduct
+      tags: [products]
+      summary: Create product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProduct"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+
+  /orders:
+    get:
+      operationId: listOrders
+      tags: [orders]
+      summary: List orders
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, confirmed, reserved, dispatched, delivered, cancelled]
+        - name: dealer_id
+          in: query
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Order list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderListResponse"
+    post:
+      operationId: createOrder
+      tags: [orders]
+      summary: Create order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrder"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      tags: [orders]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Order details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+    patch:
+      operationId: updateOrder
+      tags: [orders]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrder"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /warehouses:
+    get:
+      operationId: listWarehouses
+      tags: [warehouses]
+      summary: List warehouses
+      responses:
+        "200":
+          description: Warehouse list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Warehouse"
+    post:
+      operationId: createWarehouse
+      tags: [warehouses]
+      summary: Create warehouse
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWarehouse"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Warehouse"
+
+  /dealers:
+    get:
+      operationId: listDealers
+      tags: [dealers]
+      summary: List dealers
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Dealer list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DealerListResponse"
+    post:
+      operationId: createDealer
+      tags: [dealers]
+      summary: Create dealer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDealer"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dealer"
+
+  /logistics/dispatches:
+    get:
+      operationId: listDispatches
+      tags: [logistics]
+      summary: List dispatches
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [planned, loading, in_transit, delivered, failed]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Dispatch list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DispatchListResponse"
+    post:
+      operationId: createDispatch
+      tags: [logistics]
+      summary: Create dispatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDispatch"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispatch"
+
+  /finance/reports:
+    get:
+      operationId: getFinanceReport
+      tags: [finance]
+      summary: Get finance report summary
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [daily, weekly, monthly, quarterly, yearly]
+            default: monthly
+      responses:
+        "200":
+          description: Finance report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinanceReport"
+
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List users
+      responses:
+        "200":
+          description: User list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Create user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUser"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    DashboardSummary:
+      type: object
+      properties:
+        totalInventoryValue:
+          type: number
+        totalOrders:
+          type: integer
+        pendingDispatches:
+          type: integer
+        activeWarehouses:
+          type: integer
+        totalDealers:
+          type: integer
+        monthlyRevenue:
+          type: number
+        inventoryTurnover:
+          type: number
+        pendingQC:
+          type: integer
+        inTransitShipments:
+          type: integer
+        quarantinedItems:
+          type: integer
+      required:
+        - totalInventoryValue
+        - totalOrders
+        - pendingDispatches
+        - activeWarehouses
+        - totalDealers
+        - monthlyRevenue
+        - inventoryTurnover
+        - pendingQC
+        - inTransitShipments
+        - quarantinedItems
+
+    TrendDataPoint:
+      type: object
+      properties:
+        month:
+          type: string
+        value:
+          type: number
+        previousValue:
+          type: number
+      required:
+        - month
+        - value
+
+    WarehouseStockItem:
+      type: object
+      properties:
+        warehouse:
+          type: string
+        code:
+          type: string
+        stock:
+          type: integer
+        value:
+          type: number
+        utilization:
+          type: number
+      required:
+        - warehouse
+        - code
+        - stock
+        - value
+        - utilization
+
+    Activity:
+      type: object
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+        description:
+          type: string
+        user:
+          type: string
+        timestamp:
+          type: string
+        status:
+          type: string
+      required:
+        - id
+        - type
+        - description
+        - user
+        - timestamp
+        - status
+
+    InventoryItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        barcode:
+          type: string
+        productId:
+          type: integer
+        productName:
+          type: string
+        category:
+          type: string
+        warehouseId:
+          type: integer
+        warehouseName:
+          type: string
+        binLocation:
+          type: string
+        status:
+          type: string
+          enum: [available, reserved, quarantined, in_transit]
+        quantity:
+          type: integer
+        unitPrice:
+          type: number
+        totalValue:
+          type: number
+        hsnCode:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - barcode
+        - productId
+        - productName
+        - category
+        - warehouseId
+        - warehouseName
+        - status
+        - quantity
+        - unitPrice
+        - totalValue
+        - createdAt
+        - updatedAt
+
+    InventoryListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryItem"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - limit
+
+    CreateInventoryItem:
+      type: object
+      properties:
+        productId:
+          type: integer
+        warehouseId:
+          type: integer
+        quantity:
+          type: integer
+        unitPrice:
+          type: number
+        hsnCode:
+          type: string
+        grossWeight:
+          type: number
+      required:
+        - productId
+        - warehouseId
+        - quantity
+        - unitPrice
+
+    UpdateInventoryItem:
+      type: object
+      properties:
+        status:
+          type: string
+        binLocation:
+          type: string
+        quantity:
+          type: integer
+
+    QCDecision:
+      type: object
+      properties:
+        decision:
+          type: string
+          enum: [accept, reject]
+        rejectionReason:
+          type: string
+        notes:
+          type: string
+      required:
+        - decision
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        category:
+          type: string
+        subcategory:
+          type: string
+        description:
+          type: string
+        masterBarcode:
+          type: string
+        hsnCode:
+          type: string
+        basePrice:
+          type: number
+        unit:
+          type: string
+        dimensions:
+          type: string
+        weight:
+          type: number
+        origin:
+          type: string
+          enum: [manufactured, imported]
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - category
+        - masterBarcode
+        - hsnCode
+        - basePrice
+        - unit
+        - origin
+        - createdAt
+
+    ProductListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - limit
+
+    CreateProduct:
+      type: object
+      properties:
+        name:
+          type: string
+        category:
+          type: string
+        subcategory:
+          type: string
+        description:
+          type: string
+        hsnCode:
+          type: string
+        basePrice:
+          type: number
+        unit:
+          type: string
+        dimensions:
+          type: string
+        weight:
+          type: number
+        origin:
+          type: string
+          enum: [manufactured, imported]
+      required:
+        - name
+        - category
+        - hsnCode
+        - basePrice
+        - unit
+        - origin
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: integer
+        orderNumber:
+          type: string
+        dealerId:
+          type: integer
+        dealerName:
+          type: string
+        status:
+          type: string
+          enum: [pending, confirmed, reserved, dispatched, delivered, cancelled]
+        totalAmount:
+          type: number
+        advancePaid:
+          type: number
+        balanceAmount:
+          type: number
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - orderNumber
+        - dealerId
+        - dealerName
+        - status
+        - totalAmount
+        - advancePaid
+        - balanceAmount
+        - items
+        - createdAt
+        - updatedAt
+
+    OrderItem:
+      type: object
+      properties:
+        productId:
+          type: integer
+        productName:
+          type: string
+        quantity:
+          type: integer
+        unitPrice:
+          type: number
+        totalPrice:
+          type: number
+      required:
+        - productId
+        - productName
+        - quantity
+        - unitPrice
+        - totalPrice
+
+    OrderListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - limit
+
+    CreateOrder:
+      type: object
+      properties:
+        dealerId:
+          type: integer
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              productId:
+                type: integer
+              quantity:
+                type: integer
+              unitPrice:
+                type: number
+            required:
+              - productId
+              - quantity
+              - unitPrice
+        advancePaid:
+          type: number
+      required:
+        - dealerId
+        - items
+
+    UpdateOrder:
+      type: object
+      properties:
+        status:
+          type: string
+        advancePaid:
+          type: number
+
+    Warehouse:
+      type: object
+      properties:
+        id:
+          type: integer
+        code:
+          type: string
+        name:
+          type: string
+        location:
+          type: string
+        address:
+          type: string
+        manager:
+          type: string
+        capacity:
+          type: integer
+        usedCapacity:
+          type: integer
+        isActive:
+          type: boolean
+        lat:
+          type: number
+        lng:
+          type: number
+      required:
+        - id
+        - code
+        - name
+        - location
+        - isActive
+
+    CreateWarehouse:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        location:
+          type: string
+        address:
+          type: string
+        manager:
+          type: string
+        capacity:
+          type: integer
+      required:
+        - code
+        - name
+        - location
+
+    Dealer:
+      type: object
+      properties:
+        id:
+          type: integer
+        dealerCode:
+          type: string
+        name:
+          type: string
+        contactPerson:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        gstNumber:
+          type: string
+        creditLimit:
+          type: number
+        outstandingBalance:
+          type: number
+        isActive:
+          type: boolean
+        commissionSlab:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - dealerCode
+        - name
+        - contactPerson
+        - phone
+        - city
+        - state
+        - isActive
+        - createdAt
+
+    DealerListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Dealer"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - limit
+
+    CreateDealer:
+      type: object
+      properties:
+        name:
+          type: string
+        contactPerson:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        gstNumber:
+          type: string
+        creditLimit:
+          type: number
+        commissionSlab:
+          type: string
+      required:
+        - name
+        - contactPerson
+        - phone
+        - city
+        - state
+
+    Dispatch:
+      type: object
+      properties:
+        id:
+          type: integer
+        dispatchNumber:
+          type: string
+        orderId:
+          type: integer
+        vehicleNumber:
+          type: string
+        driverName:
+          type: string
+        driverPhone:
+          type: string
+        status:
+          type: string
+          enum: [planned, loading, in_transit, delivered, failed]
+        routePlan:
+          type: string
+        eWayBillNumber:
+          type: string
+        dispatchDate:
+          type: string
+        deliveryDate:
+          type: string
+        proofOfDelivery:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - dispatchNumber
+        - orderId
+        - status
+        - createdAt
+
+    DispatchListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Dispatch"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - limit
+
+    CreateDispatch:
+      type: object
+      properties:
+        orderId:
+          type: integer
+        vehicleNumber:
+          type: string
+        driverName:
+          type: string
+        driverPhone:
+          type: string
+        routePlan:
+          type: string
+        dispatchDate:
+          type: string
+      required:
+        - orderId
+        - vehicleNumber
+        - driverName
+        - driverPhone
+
+    FinanceReport:
+      type: object
+      properties:
+        period:
+          type: string
+        totalRevenue:
+          type: number
+        totalCost:
+          type: number
+        grossProfit:
+          type: number
+        grossMargin:
+          type: number
+        totalOrders:
+          type: integer
+        averageOrderValue:
+          type: number
+        outstandingReceivables:
+          type: number
+        topProducts:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              revenue:
+                type: number
+              units:
+                type: integer
+            required:
+              - name
+              - revenue
+              - units
+        channelBreakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              channel:
+                type: string
+              revenue:
+                type: number
+              percentage:
+                type: number
+            required:
+              - channel
+              - revenue
+              - percentage
+      required:
+        - period
+        - totalRevenue
+        - totalCost
+        - grossProfit
+        - grossMargin
+        - totalOrders
+        - averageOrderValue
+        - outstandingReceivables
+        - topProducts
+        - channelBreakdown
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [super_admin, admin, inventory_manager, distribution_head, finance_head, accounts_team, business_analyst, marketing_head, creative_team, sales_manager, warehouse_manager, warehouse_supervisor, transport_coordinator]
+        isActive:
+          type: boolean
+        lastLogin:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - email
+        - role
+        - isActive
+        - createdAt
+
+    CreateUser:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+        password:
+          type: string
+      required:
+        - name
+        - email
+        - role
+        - password
