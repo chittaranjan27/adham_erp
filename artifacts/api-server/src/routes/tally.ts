@@ -2,11 +2,12 @@ import { Router } from "express";
 import {
   checkTallyConnection,
   pushSalesVoucher,
+  pushPurchaseVoucher,
   pushReceiptVoucher,
   getDealerOutstanding,
 } from "../lib/tallyClient";
 import { db } from "@workspace/db";
-import { ordersTable, dealersTable, activitiesTable } from "@workspace/db";
+import { ordersTable, dealersTable, activitiesTable, purchaseOrdersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const router = Router();
@@ -81,6 +82,53 @@ router.post("/sync-order/:id", async (req, res) => {
   } catch (err: any) {
     req.log.error(err, "Tally sync-order failed");
     res.status(500).json({ error: "Failed to sync order to Tally" });
+  }
+});
+
+// ─── POST /tally/sync-purchase/:poId — Manually push a PO to Tally ────────────
+router.post("/sync-purchase/:poId", async (req, res) => {
+  try {
+    const poId = Number(req.params.poId);
+    const [po] = await db.select().from(purchaseOrdersTable).where(eq(purchaseOrdersTable.id, poId));
+
+    if (!po) return res.status(404).json({ error: "Purchase Order not found" });
+
+    const totalAmount = Number(po.totalAmount ?? 0);
+    // As items aren't directly linked in the table, we build a bulk item
+    const items = [{
+      productName: "Bulk Procurement Delivery",
+      quantity: 1, // aggregate unit
+      unitPrice: totalAmount
+    }];
+
+    const result = await pushPurchaseVoucher({
+      poNumber: po.poNumber,
+      supplierName: po.supplierName,
+      totalAmount,
+      taxAmount: Number(po.taxAmount ?? 0),
+      shippingAmount: Number(po.shippingAmount ?? 0),
+      items,
+      date: new Date(),
+    });
+
+    await db.insert(activitiesTable).values({
+      type: "tally_sync",
+      description: result.success
+        ? `Tally sync successful for PO #${po.poNumber} — Purchase Invoice pushed`
+        : `Tally sync FAILED for PO #${po.poNumber} — ${result.message}`,
+      user: "System",
+      status: result.success ? "completed" : "rejected",
+    });
+
+    res.json({
+      success: result.success,
+      poNumber: po.poNumber,
+      supplierName: po.supplierName,
+      message: result.message,
+    });
+  } catch (err: any) {
+    req.log.error(err, "Tally sync-purchase failed");
+    res.status(500).json({ error: "Failed to sync purchase to Tally" });
   }
 });
 

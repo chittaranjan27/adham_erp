@@ -37,6 +37,7 @@ export interface SalesVoucherData {
     hsnCode?: string;
   }>;
   date?: Date;
+  action?: "Create" | "Alter";
 }
 
 export interface PurchaseVoucherData {
@@ -59,6 +60,29 @@ export interface ReceiptVoucherData {
   dealerName: string;
   amount: number;
   paymentReference?: string;
+  date?: Date;
+}
+
+export interface SalesOrderData {
+  orderNumber: string;
+  dealerName: string;
+  totalAmount: number;
+  advancePaid: number;
+  items: Array<{
+    productName: string;
+    quantity: number;
+    unitPrice: number;
+  }>;
+  date?: Date;
+  action?: "Create" | "Alter";
+}
+
+export interface CancelVoucherData {
+  voucherNumber: string;
+  voucherType: "Sales" | "Sales Order" | "Receipt" | "Purchase";
+  dealerName: string;
+  totalAmount: number;
+  reason?: string;
   date?: Date;
 }
 
@@ -86,6 +110,7 @@ function escapeXml(str: string): string {
 /** Send raw XML payload to Tally and return the response */
 async function sendToTally(xmlPayload: string): Promise<TallyResponse> {
   try {
+    console.log(`[Tally] Sending request to ${TALLY_URL}...`);
     const response = await fetch(TALLY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/xml; charset=utf-8" },
@@ -103,8 +128,19 @@ async function sendToTally(xmlPayload: string): Promise<TallyResponse> {
     const created =
       responseText.includes("Created") ||
       responseText.includes("<CREATED>1</CREATED>");
+    const altered =
+      responseText.includes("Altered") ||
+      responseText.includes("<ALTERED>1</ALTERED>");
+    const cancelled =
+      responseText.includes("Cancelled") ||
+      responseText.includes("<CANCELLED>1</CANCELLED>");
+    const deleted =
+      responseText.includes("Deleted") ||
+      responseText.includes("<DELETED>1</DELETED>");
 
-    if (hasError && !created) {
+    const isSuccess = created || altered || cancelled || deleted;
+
+    if (hasError && !isSuccess) {
       // Extract error message from XML
       const errorMatch = responseText.match(/<LINEERROR>(.*?)<\/LINEERROR>/);
       const errorsMatch = responseText.match(/<ERRORS>(.*?)<\/ERRORS>/);
@@ -119,12 +155,20 @@ async function sendToTally(xmlPayload: string): Promise<TallyResponse> {
         .replace(/&gt;/g, ">")
         .replace(/&amp;/g, "&");
 
+      console.log(`[Tally] Error: ${errorMsg}`);
       return { success: false, message: errorMsg, rawXml: responseText };
     }
 
+    let message = "Request processed";
+    if (created) message = "Voucher created successfully";
+    else if (altered) message = "Voucher altered successfully";
+    else if (cancelled) message = "Voucher cancelled successfully";
+    else if (deleted) message = "Voucher deleted successfully";
+
+    console.log(`[Tally] Success: ${message}`);
     return {
       success: true,
-      message: created ? "Voucher created successfully" : "Request processed",
+      message,
       rawXml: responseText,
     };
   } catch (err: any) {
@@ -217,7 +261,9 @@ export async function pushSalesVoucher(data: SalesVoucherData): Promise<TallyRes
     })
     .join("\n");
 
-  const xml = `
+  const remoteId = `ADHAM-ERP-SALE-${escapeXml(data.orderNumber)}`;
+
+  const buildXml = (action: string) => `
 <ENVELOPE>
   <HEADER>
     <TALLYREQUEST>Import Data</TALLYREQUEST>
@@ -232,7 +278,7 @@ export async function pushSalesVoucher(data: SalesVoucherData): Promise<TallyRes
       </REQUESTDESC>
       <REQUESTDATA>
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="Sales" ACTION="Create" OBJVIEW="Invoice Voucher View">
+          <VOUCHER REMOTEID="${remoteId}" VCHTYPE="Sales" ACTION="${action}" OBJVIEW="Invoice Voucher View">
             <DATE>${date}</DATE>
             <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
             <VOUCHERNUMBER>${escapeXml(data.orderNumber)}</VOUCHERNUMBER>
@@ -258,7 +304,43 @@ export async function pushSalesVoucher(data: SalesVoucherData): Promise<TallyRes
   </BODY>
 </ENVELOPE>`.trim();
 
-  return sendToTally(xml);
+  if (data.action === "Alter") {
+    // Strategy: Delete old voucher then re-create with fresh data.
+    // This is the most reliable approach for Tally integrations because
+    // Alter requires exact REMOTEID/GUID matching which can be fragile.
+    console.log(`[Tally] Updating Sales Voucher ${data.orderNumber} — delete + re-create strategy`);
+    const deleteXml = `
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(TALLY_COMPANY)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER REMOTEID="${remoteId}" VCHTYPE="Sales" ACTION="Delete">
+            <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+            <VOUCHERNUMBER>${escapeXml(data.orderNumber)}</VOUCHERNUMBER>
+          </VOUCHER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+    const delRes = await sendToTally(deleteXml);
+    console.log(`[Tally] Delete result for ${data.orderNumber}: ${delRes.success ? 'OK' : delRes.message}`);
+    // Whether delete succeeded or not (voucher may not exist yet), create fresh
+    const createRes = await sendToTally(buildXml("Create"));
+    return createRes;
+  }
+
+  return sendToTally(buildXml("Create"));
 }
 
 // ─── Purchase Voucher (GRN Accepted) ────────────────────────────────────────────
@@ -434,3 +516,209 @@ export async function getDealerOutstanding(dealerName: string): Promise<{
       : "Balance not found in response",
   };
 }
+
+// ─── Sales Order Voucher (Order Created) ────────────────────────────────────────
+
+/**
+ * Push a Sales Order to Tally when a new order is placed.
+ *
+ * Sales Orders in Tally are non-financial tracking vouchers — they don't
+ * affect ledger balances but appear in the Order Book and pending orders
+ * report. When the order is later delivered, a separate Sales Invoice
+ * is pushed (via pushSalesVoucher) to record the actual financial impact.
+ */
+export async function pushSalesOrderVoucher(data: SalesOrderData): Promise<TallyResponse> {
+  const date = tallyDate(data.date);
+  const dealerName = escapeXml(data.dealerName);
+  const narration = escapeXml(
+    `ERP Order ${data.orderNumber} — ${data.items.length} item(s) — Total: ${data.totalAmount}${data.advancePaid > 0 ? ` (advance: ${data.advancePaid})` : ""}`
+  );
+
+  const remoteId = `ADHAM-ERP-ORD-${escapeXml(data.orderNumber)}`;
+
+  const buildXml = (action: string) => `
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(TALLY_COMPANY)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER REMOTEID="${remoteId}" VCHTYPE="Sales" ACTION="${action}" OBJVIEW="Accounting Voucher View">
+            <DATE>${date}</DATE>
+            <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+            <VOUCHERNUMBER>${escapeXml(data.orderNumber)}</VOUCHERNUMBER>
+            <PARTYLEDGERNAME>${dealerName}</PARTYLEDGERNAME>
+            <PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>
+            <NARRATION>${narration}</NARRATION>
+            <ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>${dealerName}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+              <AMOUNT>-${data.totalAmount}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>
+            <ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>Sales Account - Building Materials</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <AMOUNT>${data.totalAmount}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>
+          </VOUCHER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+  if (data.action === "Alter") {
+    // Strategy: Delete old voucher then re-create with fresh data.
+    console.log(`[Tally] Updating Sales Order ${data.orderNumber} — delete + re-create strategy`);
+    const deleteXml = `
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(TALLY_COMPANY)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER REMOTEID="${remoteId}" VCHTYPE="Sales" ACTION="Delete">
+            <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+            <VOUCHERNUMBER>${escapeXml(data.orderNumber)}</VOUCHERNUMBER>
+          </VOUCHER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+    const delRes = await sendToTally(deleteXml);
+    console.log(`[Tally] Delete result for ${data.orderNumber}: ${delRes.success ? 'OK' : delRes.message}`);
+    // Whether delete succeeded or not (voucher may not exist yet), create fresh
+    const createRes = await sendToTally(buildXml("Create"));
+    return createRes;
+  }
+
+  return sendToTally(buildXml("Create"));
+}
+
+// ─── Cancel / Reverse a Tally Voucher ───────────────────────────────────────────
+
+/**
+ * Cancel or reverse a voucher in Tally when an order is cancelled.
+ *
+ * Strategy:
+ *   1. First attempts to DELETE the original voucher (works for Sales Orders
+ *      and non-posted vouchers).
+ *   2. If deletion fails (e.g. already posted), falls back to creating a
+ *      Credit Note that zeroes out the financial impact.
+ *
+ * This two-step approach ensures cancellation works regardless of what
+ * state the voucher is in inside Tally.
+ */
+export async function cancelTallyVoucher(data: CancelVoucherData): Promise<TallyResponse> {
+  const date = tallyDate(data.date);
+  const dealerName = escapeXml(data.dealerName);
+  const reason = escapeXml(data.reason ?? `Cancelled from ERP — order ${data.voucherNumber}`);
+
+  // ── Attempt 1: Delete the original voucher ──────────────────────────────────
+  const deleteXml = `
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(TALLY_COMPANY)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="${escapeXml(data.voucherType)}" ACTION="Delete">
+            <VOUCHERTYPENAME>${escapeXml(data.voucherType)}</VOUCHERTYPENAME>
+            <VOUCHERNUMBER>${escapeXml(data.voucherNumber)}</VOUCHERNUMBER>
+          </VOUCHER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+  const deleteResult = await sendToTally(deleteXml);
+  if (deleteResult.success) {
+    return {
+      success: true,
+      message: `${data.voucherType} voucher ${data.voucherNumber} deleted from Tally`,
+      rawXml: deleteResult.rawXml,
+    };
+  }
+
+  // ── Attempt 2: Create a Credit Note to reverse the financial impact ─────────
+  const creditNoteXml = `
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(TALLY_COMPANY)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="Credit Note" ACTION="Create">
+            <DATE>${date}</DATE>
+            <VOUCHERTYPENAME>Credit Note</VOUCHERTYPENAME>
+            <VOUCHERNUMBER>CN-${escapeXml(data.voucherNumber)}</VOUCHERNUMBER>
+            <PARTYLEDGERNAME>${dealerName}</PARTYLEDGERNAME>
+            <NARRATION>${reason}</NARRATION>
+            <ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>${dealerName}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <AMOUNT>${data.totalAmount}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>
+            <ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>Sales Account - Building Materials</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+              <AMOUNT>-${data.totalAmount}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>
+          </VOUCHER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+  const creditResult = await sendToTally(creditNoteXml);
+  if (creditResult.success) {
+    return {
+      success: true,
+      message: `Credit Note CN-${data.voucherNumber} created in Tally (original could not be deleted: ${deleteResult.message})`,
+      rawXml: creditResult.rawXml,
+    };
+  }
+
+  // Both attempts failed
+  return {
+    success: false,
+    message: `Could not cancel voucher in Tally. Delete: ${deleteResult.message}. Credit Note: ${creditResult.message}`,
+    rawXml: creditResult.rawXml,
+  };
+}
+

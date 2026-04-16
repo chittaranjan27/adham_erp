@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { grnTable, purchaseOrdersTable, warehousesTable, inventoryTable, activitiesTable } from "@workspace/db";
 import { eq, count, desc } from "drizzle-orm";
+import { pushPurchaseVoucher } from "../lib/tallyClient";
 
 const router = Router();
 
@@ -137,6 +138,34 @@ router.patch("/:id", async (req, res) => {
         user: verifiedBy ?? "Warehouse Manager",
         status: "completed",
       });
+
+      const po = grn.poId ? await db.select().from(purchaseOrdersTable).where(eq(purchaseOrdersTable.id, grn.poId)).then(r => r[0]) : undefined;
+      
+      // Auto-trigger Tally Sync for Purchase Voucher if we have PO details
+      if (po) {
+        pushPurchaseVoucher({
+          poNumber: po.poNumber,
+          supplierName: po.supplierName,
+          totalAmount: Number(po.totalAmount ?? 0),
+          taxAmount: Number(po.taxAmount ?? 0),
+          shippingAmount: Number(po.shippingAmount ?? 0),
+          items: [{
+            productName: "Bulk Procurement Delivery",
+            quantity: Number(grn.totalItemsReceived),
+            unitPrice: Number(po.totalAmount ?? 0) / Number(grn.totalItemsReceived || 1)
+          }],
+          date: new Date()
+        }).then(async (result) => {
+          await db.insert(activitiesTable).values({
+            type: "tally_sync",
+            description: result.success
+              ? `Tally sync successful for GRN ${grn.grnNumber} — Purchase Invoice pushed`
+              : `Tally sync failed for GRN ${grn.grnNumber} — ${result.message}`,
+            user: "System",
+            status: result.success ? "completed" : "rejected",
+          });
+        }).catch(err => req.log.warn({ err }, "Tally purchase sync failed"));
+      }
     }
 
     const po = grn.poId ? await db.select().from(purchaseOrdersTable).where(eq(purchaseOrdersTable.id, grn.poId)).then(r => r[0]) : undefined;

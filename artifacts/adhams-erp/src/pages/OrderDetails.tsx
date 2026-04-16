@@ -1,9 +1,9 @@
 import { useParams, Link } from "wouter";
-import { useGetOrder, useUpdateOrder } from "@workspace/api-client-react";
-import { useState } from "react";
+import { useGetOrder, useUpdateOrder, useListDealers, useListProducts } from "@workspace/api-client-react";
+import { useState, useEffect } from "react";
 import { 
   ArrowLeft, CheckCircle2, AlertCircle, RefreshCw, Receipt, 
-  Package, Truck, Calendar, ShoppingCart, IndianRupee
+  Package, Truck, Calendar, ShoppingCart, IndianRupee, Edit, X, Plus, Trash2
 } from "lucide-react";
 import { useRole } from "@/context/RoleContext";
 
@@ -23,9 +23,34 @@ export default function OrderDetails() {
   const { id } = useParams();
   const orderId = Number(id);
   const { data: order, isLoading, refetch } = useGetOrder(orderId);
+  const { data: dealersData } = useListDealers({ limit: 200 });
+  const { data: productsData } = useListProducts({ limit: 200 });
   const { can } = useRole();
   const [syncing, setSyncing] = useState<"sales" | "advance" | null>(null);
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({
+    dealerId: "",
+    advancePaid: "",
+    notes: "",
+    items: [] as any[]
+  });
+
+  useEffect(() => {
+    if (order && isEditOpen) {
+      setEditForm({
+        dealerId: String(order.dealerId),
+        advancePaid: String(order.advancePaid || 0),
+        notes: (order as any).notes || "",
+        items: (order.items || []).map((i: any) => ({
+          productId: String(i.productId),
+          productName: i.productName,
+          quantity: String(i.quantity),
+          unitPrice: String(i.unitPrice)
+        }))
+      });
+    }
+  }, [order, isEditOpen]);
 
   const updateOrder = useUpdateOrder({
     mutation: {
@@ -64,6 +89,40 @@ export default function OrderDetails() {
     } finally {
       setSyncing(null);
     }
+  };
+
+  const handleEditSubmit = () => {
+    if (!editForm.dealerId) {
+      setToast({ type: "error", msg: "Please select a dealer." });
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+    const validItems = editForm.items.filter((item: any) => {
+      const qty = parseInt(item.quantity) || 0;
+      const price = parseFloat(item.unitPrice) || 0;
+      return item.productId && qty > 0 && price > 0;
+    });
+    if (validItems.length === 0) {
+      setToast({ type: "error", msg: "Add at least one product with valid quantity and price." });
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+    
+    updateOrder.mutate({
+      id: orderId,
+      data: {
+        dealerId: parseInt(editForm.dealerId),
+        advancePaid: parseFloat(editForm.advancePaid) || 0,
+        notes: editForm.notes,
+        items: validItems.map((item: any) => ({
+          productId: parseInt(item.productId),
+          productName: item.productName,
+          quantity: parseInt(item.quantity),
+          unitPrice: parseFloat(item.unitPrice),
+        }))
+      } as any
+    });
+    setIsEditOpen(false);
   };
 
   const markDelivered = () => {
@@ -140,6 +199,14 @@ export default function OrderDetails() {
               className="px-4 py-2 bg-emerald-600 text-white font-medium rounded-xl shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-colors flex items-center gap-2"
             >
               <Truck className="w-4 h-4" /> Mark Delivered
+            </button>
+          )}
+          {can("orders") && (
+            <button 
+              onClick={() => setIsEditOpen(true)}
+              className="px-4 py-2 bg-secondary text-secondary-foreground font-medium rounded-xl border border-border hover:bg-secondary/80 transition-colors flex items-center gap-2"
+            >
+              <Edit className="w-4 h-4" /> Edit Order
             </button>
           )}
         </div>
@@ -277,6 +344,145 @@ export default function OrderDetails() {
           </div>
         </div>
       </div>
+      
+      {isEditOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center sm:p-4">
+          <div className="bg-card rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-3xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[85vh] flex flex-col">
+            <div className="p-6 border-b border-border flex justify-between items-center">
+              <div>
+                <h2 className="text-xl font-bold font-display">Edit Order</h2>
+                <p className="text-sm text-muted-foreground mt-0.5">Modify order details</p>
+              </div>
+              <button onClick={() => setIsEditOpen(false)} className="text-muted-foreground hover:text-foreground p-1.5 hover:bg-muted rounded-lg transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6 max-h-[60vh] overflow-y-auto">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2 md:col-span-1">
+                  <label className="block text-sm font-medium mb-1.5">Dealer <span className="text-red-500">*</span></label>
+                  <select
+                    value={editForm.dealerId}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, dealerId: e.target.value }))}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
+                  >
+                    <option value="">Select dealer...</option>
+                    {dealersData?.items?.map((d: any) => (
+                      <option key={d.id} value={d.id}>{d.name} ({d.dealerCode})</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1.5">Advance Paid (₹)</label>
+                  <input
+                    type="number"
+                    value={editForm.advancePaid}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, advancePaid: e.target.value }))}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                    placeholder="0.00"
+                    min="0"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium mb-1.5">Internal Notes</label>
+                  <textarea
+                    value={editForm.notes}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, notes: e.target.value }))}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background focus:outline-none focus:border-primary text-sm min-h-[80px] resize-none"
+                    placeholder="Enter any notes..."
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-sm font-medium">Order Items <span className="text-red-500">*</span></label>
+                  <button onClick={() => setEditForm(prev => ({ ...prev, items: [...prev.items, { productId: "", productName: "", quantity: "1", unitPrice: "" }] }))} className="text-xs text-primary hover:underline flex items-center gap-1 font-medium">
+                    <Plus className="w-3.5 h-3.5" /> Add Item
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {editForm.items.map((item, i) => (
+                    <div key={i} className="grid grid-cols-12 gap-2 items-start p-3 bg-muted/30 rounded-xl border border-border">
+                      <div className="col-span-5">
+                        <label className="text-xs text-muted-foreground mb-1 block">Product</label>
+                        <select
+                          value={item.productId}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const product = productsData?.items?.find((p: any) => String(p.id) === val);
+                            setEditForm(prev => {
+                              const newItems = [...prev.items];
+                              newItems[i] = { ...newItems[i], productId: val, productName: product?.name || "", unitPrice: product?.basePrice ? String(product.basePrice) : newItems[i].unitPrice };
+                              return { ...prev, items: newItems };
+                            });
+                          }}
+                          className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                        >
+                          <option value="">Select...</option>
+                          {productsData?.items?.map((p: any) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="col-span-2">
+                        <label className="text-xs text-muted-foreground mb-1 block">Qty</label>
+                        <input
+                          type="number"
+                          value={item.quantity}
+                          onChange={(e) => setEditForm(prev => { const newItems = [...prev.items]; newItems[i].quantity = e.target.value; return { ...prev, items: newItems }; })}
+                          className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                          min="1"
+                        />
+                      </div>
+                      <div className="col-span-4">
+                        <label className="text-xs text-muted-foreground mb-1 block">Unit Price (₹)</label>
+                        <input
+                          type="number"
+                          value={item.unitPrice}
+                          onChange={(e) => setEditForm(prev => { const newItems = [...prev.items]; newItems[i].unitPrice = e.target.value; return { ...prev, items: newItems }; })}
+                          className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                          placeholder="0.00"
+                          min="0"
+                        />
+                      </div>
+                      <div className="col-span-1 flex items-end pb-0.5">
+                        <button
+                          onClick={() => setEditForm(prev => ({ ...prev, items: prev.items.filter((_, idx) => idx !== i) }))}
+                          disabled={editForm.items.length === 1}
+                          className="p-1.5 text-muted-foreground hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              <div className="flex justify-end">
+                <div className="bg-primary/5 border border-primary/20 rounded-xl px-5 py-3 text-right">
+                  <p className="text-xs text-muted-foreground mb-1">New Total</p>
+                  <p className="text-xl font-bold text-primary">{formatCurrency(editForm.items.reduce((sum, item) => sum + ((parseInt(item.quantity) || 0) * (parseFloat(item.unitPrice) || 0)), 0))}</p>
+                </div>
+              </div>
+
+            </div>
+
+            <div className="p-5 border-t border-border bg-muted/20 flex justify-end gap-3">
+              <button onClick={() => setIsEditOpen(false)} className="px-5 py-2.5 font-medium rounded-xl hover:bg-muted text-foreground transition-colors">Cancel</button>
+              <button
+                onClick={handleEditSubmit}
+                disabled={updateOrder.isPending}
+                className="px-6 py-2.5 bg-primary text-primary-foreground font-semibold rounded-xl shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-all flex items-center gap-2 disabled:opacity-60"
+              >
+                {updateOrder.isPending ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Saving...</> : <><CheckCircle2 className="w-5 h-5" /> Save Changes</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

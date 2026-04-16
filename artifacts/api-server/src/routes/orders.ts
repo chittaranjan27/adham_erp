@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { ordersTable, dealersTable, activitiesTable, inventoryTable } from "@workspace/db";
 import { eq, count, sql } from "drizzle-orm";
 import { releaseExpiredReservations } from "../lib/releaseExpiredReservations";
-import { pushSalesVoucher } from "../lib/tallyClient";
+import { pushSalesVoucher, pushSalesOrderVoucher, cancelTallyVoucher } from "../lib/tallyClient";
 
 const router = Router();
 
@@ -258,6 +258,33 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // 8. Auto-sync Sales Order to TallyPrime (fire-and-forget)
+    pushSalesOrderVoucher({
+      orderNumber,
+      dealerName: dealer.name,
+      totalAmount,
+      advancePaid: advance,
+      items: sanitisedItems.map(item => ({
+        productName: item.productName || `Product #${item.productId}`,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+      })),
+      date: new Date(),
+    })
+      .then(async (result) => {
+        await db.insert(activitiesTable).values({
+          type: "tally_sync",
+          description: result.success
+            ? `Tally Sales Order created for ${orderNumber} — ${dealer.name}`
+            : `Tally sync failed for ${orderNumber} — ${result.message}`,
+          user: "System",
+          status: result.success ? "completed" : "rejected",
+        });
+      })
+      .catch((err) => {
+        req.log.warn({ err, orderNumber }, "Tally Sales Order sync failed (non-fatal)");
+      });
+
     res.status(201).json(formatOrder(order, dealer));
   } catch (err: any) {
     req.log.error({ err: err?.message, stack: err?.stack }, "Order creation failed");
@@ -318,8 +345,107 @@ router.patch("/:id", async (req, res) => {
       if (isNaN(d.getTime())) return res.status(422).json({ error: "Invalid deliveredAt date" });
       updates.deliveredAt = d;
     }
+    
+    // Additional fields for editing incorrect data
+    const { dealerId, notes, items } = req.body ?? {};
+    if (dealerId !== undefined) {
+      if (!isPositiveInt(dealerId)) return res.status(422).json({ error: "Invalid dealer ID" });
+      updates.dealerId = Number(dealerId);
+    }
+    if (notes !== undefined) {
+      updates.notes = notes;
+    }
+    if (items !== undefined && Array.isArray(items)) {
+      updates.items = items;
+      const newItemsTotal = items.reduce((sum: number, item: any) => sum + (Number(item.quantity) * Number(item.unitPrice)), 0);
+      updates.totalAmount = String(newItemsTotal);
+    }
 
     const [order] = await db.update(ordersTable).set(updates).where(eq(ordersTable.id, id)).returning();
+
+    // ─── Helper: Sync current order state to Tally (fire-and-forget) ───────────
+    // This function is called from EVERY code path to ensure Tally always
+    // receives the latest data, regardless of whether it's a reservation,
+    // delivery, cancellation, or a simple field edit.
+    const syncOrderToTally = async (latestOrder: any) => {
+      console.log(`[TallySync] Triggered for order ${latestOrder.orderNumber}, status=${latestOrder.status}, requestStatus=${status}`);
+      const effectiveStatus = latestOrder.status ?? order.status;
+      const isNewDelivery = status === "delivered" && existingOrder.status !== "delivered";
+      const isNewCancel = status === "cancelled" && existingOrder.status !== "cancelled";
+
+      // Cancellation → delete/reverse the voucher in Tally
+      if (isNewCancel) {
+        const tallyDealer = await db.select().from(dealersTable).where(eq(dealersTable.id, latestOrder.dealerId)).then(r => r[0]);
+        cancelTallyVoucher({
+          voucherNumber: latestOrder.orderNumber,
+          voucherType: "Sales",
+          dealerName: tallyDealer?.name ?? "Unknown",
+          totalAmount: Number(latestOrder.totalAmount),
+          reason: `Order ${latestOrder.orderNumber} cancelled from ERP`,
+          date: new Date(),
+        })
+          .then(async (result) => {
+            await db.insert(activitiesTable).values({
+              type: "tally_sync",
+              description: result.success
+                ? `Tally: ${result.message}`
+                : `Tally cancellation failed for ${latestOrder.orderNumber} — ${result.message}`,
+              user: "System",
+              status: result.success ? "completed" : "rejected",
+            });
+          })
+          .catch((err) => {
+            console.warn("Tally cancel sync failed (non-fatal)", err);
+          });
+        return;
+      }
+
+      const tallyDealer = await db.select().from(dealersTable).where(eq(dealersTable.id, latestOrder.dealerId)).then(r => r[0]);
+      const orderItems = (latestOrder.items as any[]) ?? [];
+      const voucherData = {
+        orderNumber: latestOrder.orderNumber,
+        dealerName: tallyDealer?.name ?? "Unknown",
+        totalAmount: Number(latestOrder.totalAmount),
+        advancePaid: Number(latestOrder.advancePaid ?? 0),
+        items: orderItems.map((item: any) => ({
+          productName: item.productName ?? `Product #${item.productId}`,
+          quantity: Number(item.quantity),
+          unitPrice: Number(item.unitPrice),
+        })),
+        date: latestOrder.deliveredAt ?? new Date(latestOrder.createdAt),
+        // Use "Create" for brand-new status transitions, "Alter" for edits to existing vouchers
+        action: isNewDelivery ? "Create" as const : "Alter" as const,
+      };
+
+      // Delivered orders → Sales Invoice; all others → Sales Order (Accounting voucher)
+      if (effectiveStatus === "delivered") {
+        pushSalesVoucher(voucherData)
+          .then(async (result) => {
+            await db.insert(activitiesTable).values({
+              type: "tally_sync",
+              description: result.success
+                ? `Tally: Sales Invoice ${isNewDelivery ? "created" : "updated"} for #${latestOrder.orderNumber}`
+                : `Tally sync failed for #${latestOrder.orderNumber} — ${result.message}`,
+              user: "System",
+              status: result.success ? "completed" : "rejected",
+            });
+          })
+          .catch((err) => { console.error(`[TallySync] Sales Invoice push error for ${latestOrder.orderNumber}:`, err); });
+      } else {
+        pushSalesOrderVoucher(voucherData)
+          .then(async (result) => {
+            await db.insert(activitiesTable).values({
+              type: "tally_sync",
+              description: result.success
+                ? `Tally: Sales Order updated for #${latestOrder.orderNumber}`
+                : `Tally sync failed for #${latestOrder.orderNumber} — ${result.message}`,
+              user: "System",
+              status: result.success ? "completed" : "rejected",
+            });
+          })
+          .catch((err) => { console.error(`[TallySync] Sales Order push error for ${latestOrder.orderNumber}:`, err); });
+      }
+    };
 
     // ─── Advance-paid-later reservation trigger ────────────────────────────────
     // Conditions that must ALL be true to fire:
@@ -376,8 +502,7 @@ router.patch("/:id", async (req, res) => {
         }
       }
 
-      // Update order fields to reflect the reservation — override status to
-      // 'reserved' unless the caller explicitly set a different status this request.
+      // Update order fields to reflect the reservation
       await db.update(ordersTable).set({
         isStockReserved: true,
         reservedUntil,
@@ -392,44 +517,15 @@ router.patch("/:id", async (req, res) => {
         status: "completed",
       });
 
-      // Re-fetch the fully updated order for the response
+      // Re-fetch the fully updated order and SYNC TO TALLY before returning
       const [refreshed] = await db.select().from(ordersTable).where(eq(ordersTable.id, id));
+      syncOrderToTally(refreshed);
       const dealer = await db.select().from(dealersTable).where(eq(dealersTable.id, refreshed.dealerId)).then(r => r[0]);
       return res.json(formatOrder(refreshed, dealer));
     }
 
-    // ─── Tally sync on delivery — push Sales Invoice to Tally Prime ────────────
-    if (status === "delivered") {
-      const tallyDealer = await db.select().from(dealersTable).where(eq(dealersTable.id, order.dealerId)).then(r => r[0]);
-      const orderItems = (order.items as any[]) ?? [];
-
-      // Fire-and-forget: don't block the order response if Tally is unreachable
-      pushSalesVoucher({
-        orderNumber: order.orderNumber,
-        dealerName: tallyDealer?.name ?? "Unknown",
-        totalAmount: Number(order.totalAmount),
-        advancePaid: Number(order.advancePaid ?? 0),
-        items: orderItems.map((item: any) => ({
-          productName: item.productName ?? `Product #${item.productId}`,
-          quantity: Number(item.quantity),
-          unitPrice: Number(item.unitPrice),
-        })),
-        date: order.deliveredAt ?? new Date(),
-      })
-        .then(async (result) => {
-          await db.insert(activitiesTable).values({
-            type: "tally_sync",
-            description: result.success
-              ? `Tally sync successful for order #${order.orderNumber} — Sales Invoice pushed`
-              : `Tally sync failed for order #${order.orderNumber} — ${result.message}`,
-            user: "System",
-            status: result.success ? "completed" : "rejected",
-          });
-        })
-        .catch((err) => {
-          req.log.warn({ err, orderNumber: order.orderNumber }, "Tally sync failed (non-fatal)");
-        });
-    }
+    // ─── Sync ALL other updates to Tally ───────────────────────────────────────
+    syncOrderToTally(order);
 
     const dealer = await db.select().from(dealersTable).where(eq(dealersTable.id, order.dealerId)).then(r => r[0]);
     res.json(formatOrder(order, dealer));
