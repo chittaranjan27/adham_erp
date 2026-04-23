@@ -168,12 +168,20 @@ export default function PurchaseOrders() {
           <p className="text-muted-foreground text-sm mt-0.5">Manage local and import procurement</p>
         </div>
         {can("create") && (
-          <Link href="/purchase-orders/new">
-            <button className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl hover:bg-primary/90 font-medium text-sm shadow-lg shadow-primary/20 transition-all hover:scale-105 w-full sm:w-auto">
-              <Plus className="w-4 h-4" />
-              New Purchase Order
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              onClick={() => window.open("/api/purchase-orders/export/csv", "_blank")}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-secondary text-secondary-foreground rounded-xl hover:bg-secondary/80 font-medium text-sm transition-colors w-full sm:w-auto"
+            >
+              <ExternalLink className="w-4 h-4" /> Export CSV
             </button>
-          </Link>
+            <Link href="/purchase-orders/new">
+              <button className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl hover:bg-primary/90 font-medium text-sm shadow-lg shadow-primary/20 transition-all hover:scale-105 w-full sm:w-auto">
+                <Plus className="w-4 h-4" />
+                New Purchase Order
+              </button>
+            </Link>
+          </div>
         )}
       </div>
 

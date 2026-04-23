@@ -1,11 +1,13 @@
 import { useParams, Link } from "wouter";
 import { useGetOrder, useUpdateOrder, useListDealers, useListProducts } from "@workspace/api-client-react";
 import { useState, useEffect } from "react";
-import { 
-  ArrowLeft, CheckCircle2, AlertCircle, RefreshCw, Receipt, 
+import {
+  ArrowLeft, CheckCircle2, AlertCircle, RefreshCw, Receipt,
   Package, Truck, Calendar, ShoppingCart, IndianRupee, Edit, X, Plus, Trash2
 } from "lucide-react";
 import { useRole } from "@/context/RoleContext";
+
+const GST_RATES = [0, 5, 12, 18, 28];
 
 const getStatusStyle = (status: string) => {
   const styles: Record<string, string> = {
@@ -33,7 +35,12 @@ export default function OrderDetails() {
     dealerId: "",
     advancePaid: "",
     notes: "",
-    items: [] as any[]
+    items: [] as any[],
+    // Pricing fields
+    discountAmount: "0",
+    shippingAmount: "0",
+    taxRate: "0",
+    taxType: "intra" as "intra" | "inter",
   });
 
   useEffect(() => {
@@ -47,7 +54,11 @@ export default function OrderDetails() {
           productName: i.productName,
           quantity: String(i.quantity),
           unitPrice: String(i.unitPrice)
-        }))
+        })),
+        discountAmount: String((order as any).discountAmount || 0),
+        shippingAmount: String((order as any).shippingAmount || 0),
+        taxRate: String((order as any).taxRate || 0),
+        taxType: (order as any).taxType || "intra",
       });
     }
   }, [order, isEditOpen]);
@@ -66,19 +77,35 @@ export default function OrderDetails() {
     }
   });
 
-  const formatCurrency = (val: number) => 
+  const formatCurrency = (val: number) =>
     new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(val);
+
+  // ─── Compute pricing for edit form ───────────────────────────────────────────
+  const editSubtotal = editForm.items.reduce((sum: number, item: any) => {
+    const qty = parseInt(item.quantity) || 0;
+    const price = parseFloat(item.unitPrice) || 0;
+    return sum + qty * price;
+  }, 0);
+
+  const editDiscount = parseFloat(editForm.discountAmount) || 0;
+  const editTaxRate = parseFloat(editForm.taxRate) || 0;
+  const editShipping = parseFloat(editForm.shippingAmount) || 0;
+  const editTaxableAmount = editSubtotal - editDiscount;
+  const editCgst = editForm.taxType === "intra" ? Math.round(editTaxableAmount * editTaxRate / 200 * 100) / 100 : 0;
+  const editSgst = editForm.taxType === "intra" ? Math.round(editTaxableAmount * editTaxRate / 200 * 100) / 100 : 0;
+  const editIgst = editForm.taxType === "inter" ? Math.round(editTaxableAmount * editTaxRate / 100 * 100) / 100 : 0;
+  const editGrandTotal = editTaxableAmount + editCgst + editSgst + editIgst + editShipping;
 
   const handleTallySync = async (type: "sales" | "advance") => {
     setSyncing(type);
     try {
-      const endpoint = type === "sales" 
-        ? `/api/tally/sync-order/${orderId}` 
+      const endpoint = type === "sales"
+        ? `/api/tally/sync-order/${orderId}`
         : `/api/tally/sync-advance/${orderId}`;
-        
+
       const res = await fetch(endpoint, { method: "POST" });
       const data = await res.json();
-      
+
       if (data.success) {
         setToast({ type: "success", msg: data.message || `Successfully synced ${type} to Tally!` });
       } else {
@@ -107,7 +134,7 @@ export default function OrderDetails() {
       setTimeout(() => setToast(null), 3000);
       return;
     }
-    
+
     updateOrder.mutate({
       id: orderId,
       data: {
@@ -119,7 +146,16 @@ export default function OrderDetails() {
           productName: item.productName,
           quantity: parseInt(item.quantity),
           unitPrice: parseFloat(item.unitPrice),
-        }))
+        })),
+        // Pricing fields
+        discountAmount: editDiscount,
+        shippingAmount: editShipping,
+        taxRate: editTaxRate,
+        taxType: editForm.taxType,
+        cgstAmount: editCgst,
+        sgstAmount: editSgst,
+        igstAmount: editIgst,
+        grandTotal: editGrandTotal,
       } as any
     });
     setIsEditOpen(false);
@@ -158,6 +194,18 @@ export default function OrderDetails() {
     );
   }
 
+  // Pricing data from the order
+  const hasPricing = (order as any).taxRate > 0 || (order as any).discountAmount > 0 || (order as any).shippingAmount > 0;
+  const discountAmt = Number((order as any).discountAmount ?? 0);
+  const shippingAmt = Number((order as any).shippingAmount ?? 0);
+  const taxRate = Number((order as any).taxRate ?? 0);
+  const taxType = (order as any).taxType ?? "intra";
+  const cgstAmt = Number((order as any).cgstAmount ?? 0);
+  const sgstAmt = Number((order as any).sgstAmount ?? 0);
+  const igstAmt = Number((order as any).igstAmount ?? 0);
+  const grandTotal = Number((order as any).grandTotal ?? order.totalAmount);
+  const subtotal = Number((order as any).subtotal ?? order.totalAmount);
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-10">
       {toast && (
@@ -185,7 +233,7 @@ export default function OrderDetails() {
               </span>
             </div>
             <p className="text-muted-foreground text-sm flex items-center gap-2">
-              <Calendar className="w-4 h-4" /> 
+              <Calendar className="w-4 h-4" />
               Placed on {new Date(order.createdAt).toLocaleDateString("en-IN", { dateStyle: "long" })}
             </p>
           </div>
@@ -193,7 +241,7 @@ export default function OrderDetails() {
 
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
           {can("orders") && order.status !== "delivered" && order.status !== "cancelled" && (
-            <button 
+            <button
               onClick={markDelivered}
               disabled={updateOrder.isPending}
               className="px-4 py-2 bg-emerald-600 text-white font-medium rounded-xl shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-colors flex items-center gap-2"
@@ -202,7 +250,7 @@ export default function OrderDetails() {
             </button>
           )}
           {can("orders") && (
-            <button 
+            <button
               onClick={() => setIsEditOpen(true)}
               className="px-4 py-2 bg-secondary text-secondary-foreground font-medium rounded-xl border border-border hover:bg-secondary/80 transition-colors flex items-center gap-2"
             >
@@ -219,7 +267,7 @@ export default function OrderDetails() {
             <h3 className="text-lg font-bold font-display mb-4 flex items-center gap-2">
               <Package className="w-5 h-5 text-primary" /> Order Items
             </h3>
-            
+
             <div className="overflow-x-auto">
               <table className="w-full text-sm text-left">
                 <thead className="text-xs text-muted-foreground uppercase bg-muted/50 border-b border-border">
@@ -244,18 +292,63 @@ export default function OrderDetails() {
                 </tbody>
               </table>
             </div>
-            
+
+            {/* ─── Pricing Breakdown ────────────────────────────────────────── */}
             <div className="mt-6 flex justify-end">
-              <div className="w-full sm:w-1/2 space-y-3">
+              <div className="w-full sm:w-1/2 space-y-2.5">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotal</span>
-                  <span className="font-medium text-foreground">{formatCurrency(order.totalAmount)}</span>
+                  <span className="font-medium text-foreground">{formatCurrency(subtotal)}</span>
                 </div>
-                <div className="flex justify-between text-sm">
+
+                {discountAmt > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Discount</span>
+                    <span className="font-medium text-red-500">-{formatCurrency(discountAmt)}</span>
+                  </div>
+                )}
+
+                {taxRate > 0 && (
+                  <>
+                    {taxType === "inter" ? (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">IGST ({taxRate}%)</span>
+                        <span className="font-medium text-foreground">+{formatCurrency(igstAmt)}</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">CGST ({taxRate / 2}%)</span>
+                          <span className="font-medium text-foreground">+{formatCurrency(cgstAmt)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">SGST ({taxRate / 2}%)</span>
+                          <span className="font-medium text-foreground">+{formatCurrency(sgstAmt)}</span>
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+
+                {shippingAmt > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Shipping / Freight</span>
+                    <span className="font-medium text-foreground">+{formatCurrency(shippingAmt)}</span>
+                  </div>
+                )}
+
+                {hasPricing && (
+                  <div className="pt-2 border-t border-border flex justify-between">
+                    <span className="font-bold text-base">Grand Total</span>
+                    <span className="font-bold text-base text-primary">{formatCurrency(grandTotal)}</span>
+                  </div>
+                )}
+
+                <div className={`flex justify-between text-sm ${!hasPricing ? "pt-2 border-t border-border" : ""}`}>
                   <span className="text-muted-foreground">Advance Paid</span>
                   <span className="font-medium text-emerald-600">-{formatCurrency(order.advancePaid)}</span>
                 </div>
-                <div className="pt-3 border-t border-border flex justify-between">
+                <div className="pt-2 border-t border-border flex justify-between">
                   <span className="font-bold text-lg">Balance Due</span>
                   <span className={`font-bold text-lg ${order.balanceAmount > 0 ? "text-orange-600" : "text-emerald-600"}`}>
                     {formatCurrency(order.balanceAmount)}
@@ -283,6 +376,43 @@ export default function OrderDetails() {
               )}
             </div>
           </div>
+
+          {/* Tax Summary Card */}
+          {hasPricing && (
+            <div className="bg-card rounded-2xl border border-border shadow-sm p-6">
+              <h3 className="text-lg font-bold font-display mb-4 flex items-center gap-2">
+                <IndianRupee className="w-5 h-5 text-amber-500" /> Tax & Charges
+              </h3>
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">GST Rate</span>
+                  <span className="font-bold text-foreground">{taxRate}%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Supply Type</span>
+                  <span className="font-medium text-foreground px-2 py-0.5 bg-muted/50 rounded text-xs uppercase">
+                    {taxType === "inter" ? "Inter-State (IGST)" : "Intra-State (CGST+SGST)"}
+                  </span>
+                </div>
+                {discountAmt > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Discount</span>
+                    <span className="font-medium text-red-500">{formatCurrency(discountAmt)}</span>
+                  </div>
+                )}
+                {shippingAmt > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Shipping</span>
+                    <span className="font-medium text-foreground">{formatCurrency(shippingAmt)}</span>
+                  </div>
+                )}
+                <div className="pt-2 border-t border-dashed border-border flex justify-between">
+                  <span className="text-muted-foreground">Total Tax</span>
+                  <span className="font-bold text-foreground">{formatCurrency(cgstAmt + sgstAmt + igstAmt)}</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="bg-card rounded-2xl border border-border shadow-sm p-6">
             <h3 className="text-lg font-bold font-display mb-4 flex items-center gap-2">
@@ -324,17 +454,20 @@ export default function OrderDetails() {
                   </div>
                   <div className="text-left flex flex-col">
                     <span className="font-bold text-sm text-foreground">Sync Sales Invoice</span>
+                    {hasPricing && (
+                      <span className="text-[10px] text-muted-foreground">Includes GST {taxRate}% + charges</span>
+                    )}
                   </div>
                 </div>
                 {syncing === "sales" && (
                   <span className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
                 )}
                 {order.status !== "delivered" && syncing !== "sales" && (
-                  <span className="text-[10px] sm:text-xs text-muted-foreground w-max text-right">Requires<br/>Delivered Status</span>
+                  <span className="text-[10px] sm:text-xs text-muted-foreground w-max text-right">Requires<br />Delivered Status</span>
                 )}
               </button>
             </div>
-            
+
             {order.status !== "delivered" && (
               <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg text-amber-800 dark:text-amber-300 text-xs flex gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -344,7 +477,7 @@ export default function OrderDetails() {
           </div>
         </div>
       </div>
-      
+
       {isEditOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center sm:p-4">
           <div className="bg-card rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-3xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[85vh] flex flex-col">
@@ -460,11 +593,105 @@ export default function OrderDetails() {
                   ))}
                 </div>
               </div>
-              
+
+              {/* ─── Tax & Pricing Section ──────────────────────────────────── */}
+              <div className="p-4 bg-gradient-to-br from-amber-50/50 to-orange-50/50 dark:from-amber-950/20 dark:to-orange-950/20 border border-amber-200/50 dark:border-amber-800/30 rounded-xl space-y-4">
+                <h4 className="text-sm font-bold text-foreground flex items-center gap-2">
+                  <IndianRupee className="w-4 h-4 text-amber-600" /> Tax & Charges
+                </h4>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">GST Rate (%)</label>
+                    <select
+                      value={editForm.taxRate}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, taxRate: e.target.value }))}
+                      className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                    >
+                      {GST_RATES.map(r => (
+                        <option key={r} value={r}>{r}%</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Supply Type</label>
+                    <select
+                      value={editForm.taxType}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, taxType: e.target.value as "intra" | "inter" }))}
+                      className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                    >
+                      <option value="intra">Intra-State</option>
+                      <option value="inter">Inter-State</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Discount (₹)</label>
+                    <input
+                      type="number"
+                      value={editForm.discountAmount}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, discountAmount: e.target.value }))}
+                      className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                      min="0"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Shipping (₹)</label>
+                    <input
+                      type="number"
+                      value={editForm.shippingAmount}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, shippingAmount: e.target.value }))}
+                      className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                      min="0"
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* ─── Live Pricing Preview ─────────────────────────────────── */}
               <div className="flex justify-end">
-                <div className="bg-primary/5 border border-primary/20 rounded-xl px-5 py-3 text-right">
-                  <p className="text-xs text-muted-foreground mb-1">New Total</p>
-                  <p className="text-xl font-bold text-primary">{formatCurrency(editForm.items.reduce((sum, item) => sum + ((parseInt(item.quantity) || 0) * (parseFloat(item.unitPrice) || 0)), 0))}</p>
+                <div className="w-full sm:w-2/3 bg-primary/5 border border-primary/20 rounded-xl px-5 py-4 space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Subtotal</span>
+                    <span className="font-medium">{formatCurrency(editSubtotal)}</span>
+                  </div>
+                  {editDiscount > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Discount</span>
+                      <span className="font-medium text-red-500">-{formatCurrency(editDiscount)}</span>
+                    </div>
+                  )}
+                  {editTaxRate > 0 && (
+                    <>
+                      {editForm.taxType === "inter" ? (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">IGST ({editTaxRate}%)</span>
+                          <span className="font-medium">+{formatCurrency(editIgst)}</span>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">CGST ({editTaxRate / 2}%)</span>
+                            <span className="font-medium">+{formatCurrency(editCgst)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">SGST ({editTaxRate / 2}%)</span>
+                            <span className="font-medium">+{formatCurrency(editSgst)}</span>
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+                  {editShipping > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Shipping</span>
+                      <span className="font-medium">+{formatCurrency(editShipping)}</span>
+                    </div>
+                  )}
+                  <div className="pt-2 border-t border-primary/20 flex justify-between">
+                    <span className="font-bold text-sm">Grand Total</span>
+                    <span className="text-xl font-bold text-primary">{formatCurrency(editGrandTotal)}</span>
+                  </div>
                 </div>
               </div>
 

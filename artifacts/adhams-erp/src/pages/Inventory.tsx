@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { useListInventory, useListProducts, useListWarehouses, useCreateInventoryItem, ListInventoryStatus, customFetch } from "@workspace/api-client-react";
-import { Search, Filter, Plus, ScanLine, MoreVertical, CheckCircle2, XCircle, Warehouse, Upload, AlertCircle, X, ClipboardList, Lock, Edit, Trash2 } from "lucide-react";
+import { Search, Filter, Plus, ScanLine, MoreVertical, CheckCircle2, XCircle, Warehouse, Upload, AlertCircle, X, ClipboardList, Lock, Edit, Trash2, Download } from "lucide-react";
 import barcodeImg from "@assets/Barcode_scanning_1774437524977.png";
 import { useRole } from "@/context/RoleContext";
 import { useQueryClient } from "@tanstack/react-query";
@@ -172,6 +172,12 @@ export default function Inventory() {
               className="px-4 py-2.5 bg-secondary text-secondary-foreground font-medium rounded-xl hover:bg-secondary/80 transition-colors flex items-center gap-2"
             >
               <Upload className="w-4 h-4" /> Import CSV
+            </button>
+            <button
+              onClick={() => window.open("/api/inventory/export/csv", "_blank")}
+              className="px-4 py-2.5 bg-secondary text-secondary-foreground font-medium rounded-xl hover:bg-secondary/80 transition-colors flex items-center gap-2"
+            >
+              <Download className="w-4 h-4" /> Export CSV
             </button>
             <button className="px-4 py-2.5 bg-secondary text-secondary-foreground font-medium rounded-xl hover:bg-secondary/80 transition-colors flex items-center gap-2">
               <ScanLine className="w-4 h-4" /> Scan Barcode

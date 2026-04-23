@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { Link, useLocation } from "wouter";
-import { ChevronLeft, Plus, X, Save, FileText, Package, Check, Trash2, Send } from "lucide-react";
+import { ChevronLeft, Plus, X, Save, FileText, Package, Check, Trash2, Send, Paperclip, Image } from "lucide-react";
 import { useCreatePurchaseOrder } from "../hooks/useApiQuery";
 
 interface LineItem {
@@ -50,6 +50,9 @@ export default function CreatePurchaseOrder() {
   // Footer State
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [remarks, setRemarks] = useState("");
+
+  // Photo Attachment State
+  const [photoUrls, setPhotoUrls] = useState<string[]>([""]);
 
   const handleAddItem = () => {
     setItems([
@@ -122,6 +125,7 @@ export default function CreatePurchaseOrder() {
         shippingAmount: 0,
         notes: fullNotes || undefined,
         expectedDeliveryDate: expectedDate || undefined,
+        attachmentUrl: photoUrls.filter(u => u.trim()).join(" | ") || undefined,
         createdBy: localStorage.getItem("adhams_role") || "Purchase Team",
       });
 
@@ -488,6 +492,63 @@ export default function CreatePurchaseOrder() {
             />
           </div>
         </div>
+      </div>
+
+      {/* Photo Attachments */}
+      <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
+        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-wide mb-5 flex items-center gap-2">
+          <Paperclip className="w-4 h-4" />
+          Photo Attachments
+        </h2>
+        <p className="text-xs text-muted-foreground mb-4">
+          Attach product photos, quotation scans, or supplier documents. Paste Google Drive, Dropbox, or direct image URLs.
+        </p>
+        <div className="space-y-3">
+          {photoUrls.map((url, idx) => (
+            <div key={idx} className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-muted/50 border border-border flex items-center justify-center shrink-0">
+                <Image className="w-4 h-4 text-muted-foreground" />
+              </div>
+              <input
+                value={url}
+                onChange={(e) => {
+                  const updated = [...photoUrls];
+                  updated[idx] = e.target.value;
+                  setPhotoUrls(updated);
+                }}
+                placeholder="https://drive.google.com/... or paste image URL"
+                className="flex-1 px-3.5 py-2.5 bg-muted/50 border border-border rounded-xl text-sm focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all"
+              />
+              {url.trim() && (
+                <a href={url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline whitespace-nowrap">
+                  Preview
+                </a>
+              )}
+              {photoUrls.length > 1 && (
+                <button
+                  onClick={() => setPhotoUrls(photoUrls.filter((_, i) => i !== idx))}
+                  className="p-1.5 text-muted-foreground hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          ))}
+          <button
+            onClick={() => setPhotoUrls([...photoUrls, ""])}
+            className="w-full py-2.5 border border-dashed border-primary/30 text-primary bg-primary/5 rounded-xl hover:bg-primary/10 transition-colors flex items-center justify-center gap-2 font-medium text-sm"
+          >
+            <Plus className="w-4 h-4" />
+            Add Another Photo URL
+          </button>
+        </div>
+        {photoUrls.some(u => u.trim()) && (
+          <div className="mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+            <p className="text-xs text-emerald-700 font-medium">
+              📎 {photoUrls.filter(u => u.trim()).length} attachment(s) will be saved with this PO
+            </p>
+          </div>
+        )}
       </div>
       
       {/* Mobile Footer Actions (Sticky) */}

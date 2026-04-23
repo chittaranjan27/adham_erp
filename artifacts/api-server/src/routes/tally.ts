@@ -6,6 +6,7 @@ import {
   pushReceiptVoucher,
   getDealerOutstanding,
 } from "../lib/tallyClient";
+import type { OrderPricingData } from "../lib/tallyClient";
 import { db } from "@workspace/db";
 import { ordersTable, dealersTable, activitiesTable, purchaseOrdersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -49,11 +50,32 @@ router.post("/sync-order/:id", async (req, res) => {
     if (!dealer) return res.status(400).json({ error: "Dealer not found for this order" });
 
     const items = (order.items as any[]) ?? [];
+    const subtotal = items.reduce((sum: number, item: any) => sum + Number(item.unitPrice) * Number(item.quantity), 0);
+
+    // Build pricing data if tax fields exist on the order
+    const taxRate = Number(order.taxRate ?? 0);
+    const grandTotal = Number(order.grandTotal ?? 0);
+    let pricing: OrderPricingData | undefined;
+    if (taxRate > 0 || grandTotal > 0) {
+      pricing = {
+        subtotal,
+        discountAmount: Number(order.discountAmount ?? 0),
+        taxRate,
+        taxType: (order.taxType ?? "intra") as "intra" | "inter",
+        cgstAmount: Number(order.cgstAmount ?? 0),
+        sgstAmount: Number(order.sgstAmount ?? 0),
+        igstAmount: Number(order.igstAmount ?? 0),
+        shippingAmount: Number(order.shippingAmount ?? 0),
+        grandTotal: grandTotal > 0 ? grandTotal : Number(order.totalAmount),
+      };
+    }
+
     const result = await pushSalesVoucher({
       orderNumber: order.orderNumber,
       dealerName: dealer.name,
       totalAmount: Number(order.totalAmount),
       advancePaid: Number(order.advancePaid ?? 0),
+      pricing,
       items: items.map((item: any) => ({
         productName: item.productName ?? `Product #${item.productId}`,
         quantity: Number(item.quantity),
@@ -139,7 +161,7 @@ router.post("/sync-advance/:id", async (req, res) => {
     const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, orderId));
 
     if (!order) return res.status(404).json({ error: "Order not found" });
-    
+
     const advancePaid = Number(order.advancePaid ?? 0);
     if (advancePaid <= 0) {
       return res.status(400).json({ error: "No advance payment recorded for this order" });

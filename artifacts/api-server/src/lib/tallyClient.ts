@@ -25,11 +25,24 @@ export interface TallyResponse {
   rawXml?: string;
 }
 
+export interface OrderPricingData {
+  subtotal: number;        // sum of item line totals (before discount/tax)
+  discountAmount: number;  // order-level discount
+  taxRate: number;         // GST rate % (e.g. 18)
+  taxType: "intra" | "inter";  // intra = CGST+SGST, inter = IGST
+  cgstAmount: number;
+  sgstAmount: number;
+  igstAmount: number;
+  shippingAmount: number;
+  grandTotal: number;      // final billable amount
+}
+
 export interface SalesVoucherData {
   orderNumber: string;
   dealerName: string;
   totalAmount: number;
   advancePaid: number;
+  pricing?: OrderPricingData;
   items: Array<{
     productName: string;
     quantity: number;
@@ -68,6 +81,7 @@ export interface SalesOrderData {
   dealerName: string;
   totalAmount: number;
   advancePaid: number;
+  pricing?: OrderPricingData;
   items: Array<{
     productName: string;
     quantity: number;
@@ -193,6 +207,136 @@ async function sendToTally(xmlPayload: string): Promise<TallyResponse> {
   }
 }
 
+// ─── Auto-create GST & Pricing Ledgers ──────────────────────────────────────────
+
+/**
+ * Required ledgers for tax-aware vouchers.
+ * Each entry: [ledgerName, parentGroup, taxType]
+ */
+const REQUIRED_LEDGERS: Array<{ name: string; parent: string; taxType?: string; taxRate?: number }> = [
+  { name: "Output CGST",           parent: "Duties & Taxes", taxType: "GST", taxRate: 0 },
+  { name: "Output SGST",           parent: "Duties & Taxes", taxType: "GST", taxRate: 0 },
+  { name: "Output IGST",           parent: "Duties & Taxes", taxType: "GST", taxRate: 0 },
+  { name: "Discount Allowed",      parent: "Indirect Expenses" },
+  { name: "Freight & Shipping",    parent: "Direct Expenses" },
+];
+
+let _ledgersEnsured = false;
+
+/**
+ * Ensure all required GST and pricing ledgers exist in Tally.
+ * This runs once per server lifecycle (cached after first success).
+ */
+export async function ensureTallyLedgers(): Promise<void> {
+  if (_ledgersEnsured) return;
+
+  console.log("[Tally] Ensuring required ledgers exist...");
+
+  for (const ledger of REQUIRED_LEDGERS) {
+    const isTax = ledger.taxType === "GST";
+    const xml = `
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(TALLY_COMPANY)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="${escapeXml(ledger.name)}" ACTION="Create">
+            <NAME>${escapeXml(ledger.name)}</NAME>
+            <PARENT>${escapeXml(ledger.parent)}</PARENT>
+            ${isTax ? `<TAXTYPE>GST</TAXTYPE>
+            <GSTDUTYHEAD>${escapeXml(ledger.name)}</GSTDUTYHEAD>` : ""}
+          </LEDGER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+    const result = await sendToTally(xml);
+    if (result.success) {
+      console.log(`[Tally] ✓ Ledger created: ${ledger.name}`);
+    } else if (result.message.includes("already exists") || result.message.includes("Duplicate")) {
+      console.log(`[Tally] ✓ Ledger already exists: ${ledger.name}`);
+    } else {
+      // Non-fatal — log and continue
+      console.log(`[Tally] ⚠ Could not create ledger ${ledger.name}: ${result.message}`);
+    }
+  }
+
+  _ledgersEnsured = true;
+  console.log("[Tally] Ledger setup complete.");
+}
+
+// ─── Tax Ledger Entry Builder ───────────────────────────────────────────────────
+
+/**
+ * Build the XML ledger entries for taxes, discount, and shipping.
+ * Returns a string of ALLLEDGERENTRIES.LIST blocks to splice into the voucher.
+ */
+function buildPricingLedgerEntries(pricing: OrderPricingData): string {
+  const entries: string[] = [];
+
+  // Discount (reduces the receivable — positive amount = credit)
+  if (pricing.discountAmount > 0) {
+    entries.push(`
+            <ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>Discount Allowed</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <AMOUNT>-${pricing.discountAmount}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>`);
+  }
+
+  // Tax entries
+  if (pricing.taxType === "inter" && pricing.igstAmount > 0) {
+    // Inter-state: IGST only
+    entries.push(`
+            <ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>Output IGST</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <AMOUNT>${pricing.igstAmount}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>`);
+  } else {
+    // Intra-state: CGST + SGST
+    if (pricing.cgstAmount > 0) {
+      entries.push(`
+            <ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>Output CGST</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <AMOUNT>${pricing.cgstAmount}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>`);
+    }
+    if (pricing.sgstAmount > 0) {
+      entries.push(`
+            <ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>Output SGST</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <AMOUNT>${pricing.sgstAmount}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>`);
+    }
+  }
+
+  // Shipping / Freight
+  if (pricing.shippingAmount > 0) {
+    entries.push(`
+            <ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>Freight &amp; Shipping</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <AMOUNT>${pricing.shippingAmount}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>`);
+  }
+
+  return entries.join("\n");
+}
+
 // ─── Health Check ───────────────────────────────────────────────────────────────
 
 /** Test connectivity to Tally and return company info */
@@ -227,16 +371,29 @@ export async function checkTallyConnection(): Promise<TallyResponse> {
  * Push a Sales Invoice to Tally when an order is marked as "delivered".
  * 
  * This creates a voucher in Tally that:
- *  - Debits the dealer's ledger (Sundry Debtor)
- *  - Credits the Sales Account
+ *  - Debits the dealer's ledger (Sundry Debtor) with the grand total
+ *  - Credits the Sales Account with the taxable amount (subtotal - discount)
+ *  - Credits CGST/SGST or IGST ledgers for tax
+ *  - Credits Freight & Shipping for shipping charges
  *  - Auto-calculates GST based on HSN codes
  */
 export async function pushSalesVoucher(data: SalesVoucherData): Promise<TallyResponse> {
+  // Ensure GST ledgers exist before creating the voucher
+  await ensureTallyLedgers();
+
   const date = tallyDate(data.date);
   const dealerName = escapeXml(data.dealerName);
+  const pricing = data.pricing;
   const narration = escapeXml(
-    `Sales Invoice for ERP Order ${data.orderNumber} — ${data.items.length} item(s)`
+    `Sales Invoice for ERP Order ${data.orderNumber} — ${data.items.length} item(s)${pricing ? ` · GST ${pricing.taxRate}%` : ""}`
   );
+
+  // The amount the party (dealer) owes = grand total (or totalAmount if no pricing)
+  const partyAmount = pricing?.grandTotal ?? data.totalAmount;
+  // The sales account amount = taxable value (subtotal - discount), or totalAmount if no pricing
+  const salesAmount = pricing
+    ? (pricing.subtotal - pricing.discountAmount)
+    : data.totalAmount;
 
   // Build inventory entries for each line item
   const inventoryEntries = data.items
@@ -260,6 +417,9 @@ export async function pushSalesVoucher(data: SalesVoucherData): Promise<TallyRes
               </ALLINVENTORYENTRIES.LIST>`;
     })
     .join("\n");
+
+  // Build pricing ledger entries (tax, discount, shipping)
+  const pricingEntries = pricing ? buildPricingLedgerEntries(pricing) : "";
 
   const remoteId = `ADHAM-ERP-SALE-${escapeXml(data.orderNumber)}`;
 
@@ -289,13 +449,14 @@ export async function pushSalesVoucher(data: SalesVoucherData): Promise<TallyRes
             <ALLLEDGERENTRIES.LIST>
               <LEDGERNAME>${dealerName}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-              <AMOUNT>-${data.totalAmount}</AMOUNT>
+              <AMOUNT>-${partyAmount}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>
             <ALLLEDGERENTRIES.LIST>
               <LEDGERNAME>Sales Account - Building Materials</LEDGERNAME>
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-              <AMOUNT>${data.totalAmount}</AMOUNT>
+              <AMOUNT>${salesAmount}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>
+            ${pricingEntries}
             ${inventoryEntries}
           </VOUCHER>
         </TALLYMESSAGE>
@@ -526,15 +687,32 @@ export async function getDealerOutstanding(dealerName: string): Promise<{
  * affect ledger balances but appear in the Order Book and pending orders
  * report. When the order is later delivered, a separate Sales Invoice
  * is pushed (via pushSalesVoucher) to record the actual financial impact.
+ *
+ * Now includes full pricing breakdown: taxes, discounts, and shipping.
  */
 export async function pushSalesOrderVoucher(data: SalesOrderData): Promise<TallyResponse> {
+  // Ensure GST ledgers exist before creating the voucher
+  await ensureTallyLedgers();
+
   const date = tallyDate(data.date);
   const dealerName = escapeXml(data.dealerName);
+  const pricing = data.pricing;
+
   const narration = escapeXml(
-    `ERP Order ${data.orderNumber} — ${data.items.length} item(s) — Total: ${data.totalAmount}${data.advancePaid > 0 ? ` (advance: ${data.advancePaid})` : ""}`
+    `ERP Order ${data.orderNumber} — ${data.items.length} item(s) — Total: ${pricing?.grandTotal ?? data.totalAmount}${data.advancePaid > 0 ? ` (advance: ${data.advancePaid})` : ""}${pricing?.taxRate ? ` · GST ${pricing.taxRate}%` : ""}`
   );
 
   const remoteId = `ADHAM-ERP-ORD-${escapeXml(data.orderNumber)}`;
+
+  // The amount the party (dealer) owes = grand total
+  const partyAmount = pricing?.grandTotal ?? data.totalAmount;
+  // The sales account amount = taxable value (subtotal - discount)
+  const salesAmount = pricing
+    ? (pricing.subtotal - pricing.discountAmount)
+    : data.totalAmount;
+
+  // Build pricing ledger entries (tax, discount, shipping)
+  const pricingEntries = pricing ? buildPricingLedgerEntries(pricing) : "";
 
   const buildXml = (action: string) => `
 <ENVELOPE>
@@ -561,13 +739,14 @@ export async function pushSalesOrderVoucher(data: SalesOrderData): Promise<Tally
             <ALLLEDGERENTRIES.LIST>
               <LEDGERNAME>${dealerName}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-              <AMOUNT>-${data.totalAmount}</AMOUNT>
+              <AMOUNT>-${partyAmount}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>
             <ALLLEDGERENTRIES.LIST>
               <LEDGERNAME>Sales Account - Building Materials</LEDGERNAME>
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-              <AMOUNT>${data.totalAmount}</AMOUNT>
+              <AMOUNT>${salesAmount}</AMOUNT>
             </ALLLEDGERENTRIES.LIST>
+            ${pricingEntries}
           </VOUCHER>
         </TALLYMESSAGE>
       </REQUESTDATA>
@@ -721,4 +900,3 @@ export async function cancelTallyVoucher(data: CancelVoucherData): Promise<Tally
     rawXml: creditResult.rawXml,
   };
 }
-

@@ -159,6 +159,65 @@ router.post("/", async (req, res) => {
   }
 });
 
+// GET /export/csv — export inventory as CSV
+// IMPORTANT: Must be defined BEFORE /:id to avoid Express matching 'export' as a param
+router.get("/export/csv", async (req, res) => {
+  try {
+    const items = await db
+      .select({
+        barcode: inventoryTable.barcode,
+        productName: productsTable.name,
+        category: productsTable.category,
+        warehouseName: warehousesTable.name,
+        binLocation: inventoryTable.binLocation,
+        status: inventoryTable.status,
+        quantity: inventoryTable.quantity,
+        saleableQuantity: inventoryTable.saleableQuantity,
+        reservedQuantity: inventoryTable.reservedQuantity,
+        unitPrice: inventoryTable.unitPrice,
+        landingCost: inventoryTable.landingCost,
+        sellingPrice: inventoryTable.sellingPrice,
+        hsnCode: inventoryTable.hsnCode,
+        grnNumber: inventoryTable.grnNumber,
+        createdAt: inventoryTable.createdAt,
+      })
+      .from(inventoryTable)
+      .leftJoin(productsTable, eq(inventoryTable.productId, productsTable.id))
+      .leftJoin(warehousesTable, eq(inventoryTable.warehouseId, warehousesTable.id));
+
+    const headers = ["Barcode", "Product", "Category", "Warehouse", "Bin Location", "Status", "Quantity", "Saleable Qty", "Reserved Qty", "Unit Price", "Landing Cost", "Selling Price", "HSN Code", "GRN Number", "Created At"];
+    const csvRows = [headers.join(",")];
+
+    for (const item of items) {
+      const row = [
+        item.barcode,
+        `"${(item.productName ?? "").replace(/"/g, '""')}"`,
+        `"${(item.category ?? "").replace(/"/g, '""')}"`,
+        `"${(item.warehouseName ?? "").replace(/"/g, '""')}"`,
+        item.binLocation ?? "",
+        item.status,
+        item.quantity,
+        item.saleableQuantity ?? "",
+        item.reservedQuantity ?? 0,
+        item.unitPrice,
+        item.landingCost ?? "",
+        item.sellingPrice ?? "",
+        item.hsnCode ?? "",
+        item.grnNumber ?? "",
+        item.createdAt instanceof Date ? item.createdAt.toISOString() : item.createdAt,
+      ];
+      csvRows.push(row.join(","));
+    }
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename=inventory_export_${new Date().toISOString().split("T")[0]}.csv`);
+    res.send(csvRows.join("\n"));
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Failed to export inventory" });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -304,6 +363,41 @@ router.post("/qc/:id", async (req, res) => {
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Failed to process QC" });
+  }
+});
+
+// DELETE inventory item
+router.delete("/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const [item] = await db.select().from(inventoryTable).where(eq(inventoryTable.id, id));
+    if (!item) return res.status(404).json({ error: "Not found" });
+
+    // Prevent deleting reserved items — they must be released first
+    if (item.reservedQuantity > 0) {
+      return res.status(400).json({ error: "Cannot delete item with active reservations. Release reservations first." });
+    }
+
+    // Delete the linked GRN record if it exists
+    if (item.grnId) {
+      await db.delete(grnTable).where(eq(grnTable.id, item.grnId));
+    }
+
+    await db.delete(inventoryTable).where(eq(inventoryTable.id, id));
+
+    const product = await db.select().from(productsTable).where(eq(productsTable.id, item.productId)).then(r => r[0]);
+
+    await db.insert(activitiesTable).values({
+      type: "inventory",
+      description: `Inventory item deleted — ${product?.name ?? "Unknown"} (Barcode: ${item.barcode})`,
+      user: "Warehouse Team",
+      status: "completed",
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Failed to delete inventory item" });
   }
 });
 

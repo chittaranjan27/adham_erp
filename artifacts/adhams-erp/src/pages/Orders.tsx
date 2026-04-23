@@ -1,5 +1,5 @@
 import { useListOrders, useCreateOrder, useUpdateOrder, useListDealers, useListProducts } from "@workspace/api-client-react";
-import { Calendar, Search, Filter, ArrowRight, DownloadCloud, Plus, X, Trash2, CheckCircle2, AlertCircle, Upload, Edit } from "lucide-react";
+import { Calendar, Search, Filter, ArrowRight, DownloadCloud, Plus, X, Trash2, CheckCircle2, AlertCircle, Upload, Edit, IndianRupee } from "lucide-react";
 import { useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { useRole } from "@/context/RoleContext";
@@ -11,13 +11,24 @@ interface OrderForm {
   advancePaid: string;
   items: OrderItem[];
   notes: string;
+  // Pricing fields
+  discountAmount: string;
+  shippingAmount: string;
+  taxRate: string;
+  taxType: "intra" | "inter";
 }
+
+const GST_RATES = [0, 5, 12, 18, 28];
 
 const defaultForm: OrderForm = {
   dealerId: "",
   advancePaid: "",
   items: [{ productId: "", productName: "", quantity: "1", unitPrice: "" }],
   notes: "",
+  discountAmount: "0",
+  shippingAmount: "0",
+  taxRate: "0",
+  taxType: "intra",
 };
 
 const getStatusStyle = (status: string) => {
@@ -91,11 +102,21 @@ export default function Orders() {
   const formatCurrency = (val: number) =>
     new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(val);
 
-  const orderTotal = form.items.reduce((sum, item) => {
+  // ─── Compute pricing ───────────────────────────────────────────────────────
+  const subtotal = form.items.reduce((sum, item) => {
     const qty = parseInt(item.quantity) || 0;
     const price = parseFloat(item.unitPrice) || 0;
     return sum + qty * price;
   }, 0);
+
+  const discountAmount = parseFloat(form.discountAmount) || 0;
+  const taxRate = parseFloat(form.taxRate) || 0;
+  const shippingAmount = parseFloat(form.shippingAmount) || 0;
+  const taxableAmount = subtotal - discountAmount;
+  const cgstAmount = form.taxType === "intra" ? Math.round(taxableAmount * taxRate / 200 * 100) / 100 : 0;
+  const sgstAmount = form.taxType === "intra" ? Math.round(taxableAmount * taxRate / 200 * 100) / 100 : 0;
+  const igstAmount = form.taxType === "inter" ? Math.round(taxableAmount * taxRate / 100 * 100) / 100 : 0;
+  const grandTotal = taxableAmount + cgstAmount + sgstAmount + igstAmount + shippingAmount;
 
   const handleSubmit = () => {
     if (!form.dealerId) {
@@ -117,15 +138,14 @@ export default function Orders() {
     }
 
     const advance = form.advancePaid ? parseFloat(form.advancePaid) : 0;
-    const total = validItems.reduce((sum, item) => sum + parseInt(item.quantity) * parseFloat(item.unitPrice), 0);
 
     if (advance < 0) {
       setToast({ type: "error", msg: "Advance paid cannot be negative." });
       setTimeout(() => setToast(null), 3000);
       return;
     }
-    if (advance > total) {
-      setToast({ type: "error", msg: `Advance (₹${advance.toLocaleString("en-IN")}) cannot exceed order total.` });
+    if (advance > grandTotal) {
+      setToast({ type: "error", msg: `Advance (₹${advance.toLocaleString("en-IN")}) cannot exceed grand total.` });
       setTimeout(() => setToast(null), 4000);
       return;
     }
@@ -134,12 +154,23 @@ export default function Orders() {
       data: {
         dealerId: parseInt(form.dealerId),
         advancePaid: advance,
+        notes: form.notes || undefined,
         items: validItems.map((item) => ({
           productId: parseInt(item.productId),
+          productName: item.productName,
           quantity: parseInt(item.quantity),
           unitPrice: parseFloat(item.unitPrice),
         })),
-      },
+        // Pricing fields
+        discountAmount: discountAmount,
+        shippingAmount: shippingAmount,
+        taxRate: taxRate,
+        taxType: form.taxType,
+        cgstAmount: cgstAmount,
+        sgstAmount: sgstAmount,
+        igstAmount: igstAmount,
+        grandTotal: grandTotal,
+      } as any,
     });
   };
 
@@ -176,8 +207,8 @@ export default function Orders() {
   const handleCSVExport = () => {
     if (!data?.items?.length) return;
     const rows = [
-      ["Order No", "Dealer", "Status", "Total Amount", "Balance", "Date"],
-      ...data.items.map((o: any) => [o.orderNumber, o.dealerName, o.status, o.totalAmount, o.balanceAmount, new Date(o.createdAt).toLocaleDateString("en-IN")]),
+      ["Order No", "Dealer", "Status", "Subtotal", "GST%", "Grand Total", "Balance", "Date"],
+      ...data.items.map((o: any) => [o.orderNumber, o.dealerName, o.status, o.totalAmount, o.taxRate || 0, o.grandTotal || o.totalAmount, o.balanceAmount, new Date(o.createdAt).toLocaleDateString("en-IN")]),
     ];
     const csv = rows.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -276,8 +307,8 @@ export default function Orders() {
                 ))
               ) : (
                 filtered?.map((order: any) => (
-                  <tr 
-                    key={order.id} 
+                  <tr
+                    key={order.id}
                     onClick={(e) => {
                       if ((e.target as HTMLElement).closest("button") || (e.target as HTMLElement).closest("select")) return;
                       navigate(`/orders/${order.id}`);
@@ -312,8 +343,12 @@ export default function Orders() {
                       )}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="font-semibold">{formatCurrency(order.totalAmount)}</div>
-                      <div className="text-xs text-muted-foreground mt-1">Adv: {formatCurrency(order.advancePaid)}</div>
+                      <div className="font-semibold">{formatCurrency(order.grandTotal || order.totalAmount)}</div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {order.taxRate > 0 ? `GST ${order.taxRate}%` : ""}
+                        {order.taxRate > 0 ? " · " : ""}
+                        Adv: {formatCurrency(order.advancePaid)}
+                      </div>
                     </td>
                     <td className="px-6 py-4 text-right">
                       <span className={`font-bold ${order.balanceAmount > 0 ? "text-orange-600" : "text-emerald-600"}`}>
@@ -443,13 +478,110 @@ export default function Orders() {
                 </div>
               </div>
 
-              {orderTotal > 0 && (
+              {/* ─── Tax & Pricing Section ─────────────────────────────────── */}
+              <div className="p-4 bg-gradient-to-br from-amber-50/50 to-orange-50/50 dark:from-amber-950/20 dark:to-orange-950/20 border border-amber-200/50 dark:border-amber-800/30 rounded-xl space-y-4">
+                <h4 className="text-sm font-bold text-foreground flex items-center gap-2">
+                  <IndianRupee className="w-4 h-4 text-amber-600" /> Tax & Charges
+                </h4>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">GST Rate (%)</label>
+                    <select
+                      value={form.taxRate}
+                      onChange={(e) => setForm({ ...form, taxRate: e.target.value })}
+                      className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                    >
+                      {GST_RATES.map(r => (
+                        <option key={r} value={r}>{r}%</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Supply Type</label>
+                    <select
+                      value={form.taxType}
+                      onChange={(e) => setForm({ ...form, taxType: e.target.value as "intra" | "inter" })}
+                      className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                    >
+                      <option value="intra">Intra-State</option>
+                      <option value="inter">Inter-State</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Discount (₹)</label>
+                    <input
+                      type="number"
+                      value={form.discountAmount}
+                      onChange={(e) => setForm({ ...form, discountAmount: e.target.value })}
+                      className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                      min="0"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Shipping (₹)</label>
+                    <input
+                      type="number"
+                      value={form.shippingAmount}
+                      onChange={(e) => setForm({ ...form, shippingAmount: e.target.value })}
+                      className="w-full px-2 py-1.5 border border-border rounded-lg bg-background text-sm focus:outline-none focus:border-primary"
+                      min="0"
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* ─── Live Pricing Preview ──────────────────────────────────── */}
+              {subtotal > 0 && (
                 <div className="flex justify-end">
-                  <div className="bg-primary/5 border border-primary/20 rounded-xl px-5 py-3 text-right">
-                    <p className="text-xs text-muted-foreground mb-1">Order Total</p>
-                    <p className="text-xl font-bold text-primary">{formatCurrency(orderTotal)}</p>
-                    {form.advancePaid && (
-                      <p className="text-xs text-muted-foreground mt-1">Balance: {formatCurrency(orderTotal - parseFloat(form.advancePaid || "0"))}</p>
+                  <div className="w-full sm:w-2/3 bg-primary/5 border border-primary/20 rounded-xl px-5 py-4 space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Subtotal</span>
+                      <span className="font-medium">{formatCurrency(subtotal)}</span>
+                    </div>
+                    {discountAmount > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Discount</span>
+                        <span className="font-medium text-red-500">-{formatCurrency(discountAmount)}</span>
+                      </div>
+                    )}
+                    {taxRate > 0 && (
+                      <>
+                        {form.taxType === "inter" ? (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">IGST ({taxRate}%)</span>
+                            <span className="font-medium">+{formatCurrency(igstAmount)}</span>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex justify-between text-sm">
+                              <span className="text-muted-foreground">CGST ({taxRate / 2}%)</span>
+                              <span className="font-medium">+{formatCurrency(cgstAmount)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm">
+                              <span className="text-muted-foreground">SGST ({taxRate / 2}%)</span>
+                              <span className="font-medium">+{formatCurrency(sgstAmount)}</span>
+                            </div>
+                          </>
+                        )}
+                      </>
+                    )}
+                    {shippingAmount > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Shipping</span>
+                        <span className="font-medium">+{formatCurrency(shippingAmount)}</span>
+                      </div>
+                    )}
+                    <div className="pt-2 border-t border-primary/20 flex justify-between">
+                      <span className="font-bold text-sm">Grand Total</span>
+                      <span className="text-xl font-bold text-primary">{formatCurrency(grandTotal)}</span>
+                    </div>
+                    {form.advancePaid && parseFloat(form.advancePaid) > 0 && (
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>Balance after advance</span>
+                        <span>{formatCurrency(grandTotal - parseFloat(form.advancePaid || "0"))}</span>
+                      </div>
                     )}
                   </div>
                 </div>

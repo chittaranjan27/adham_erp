@@ -124,6 +124,48 @@ router.post("/", async (req, res) => {
   }
 });
 
+// GET /export/csv — export POs as CSV
+// IMPORTANT: Must be defined BEFORE /:id to avoid Express matching 'export' as a param
+router.get("/export/csv", async (req, res) => {
+  try {
+    const rows = await db
+      .select({ po: purchaseOrdersTable, warehouse: warehousesTable })
+      .from(purchaseOrdersTable)
+      .leftJoin(warehousesTable, eq(purchaseOrdersTable.warehouseId, warehousesTable.id))
+      .orderBy(desc(purchaseOrdersTable.createdAt));
+
+    const headers = ["PO Number", "Supplier", "GSTIN", "Country", "PO Type", "Status", "Currency", "Total Amount", "Tax Amount", "Shipping", "Warehouse", "Expected Delivery", "Notes", "Created At"];
+    const csvRows = [headers.join(",")];
+
+    for (const { po, warehouse } of rows) {
+      const row = [
+        po.poNumber,
+        `"${(po.supplierName ?? "").replace(/"/g, '""')}"`,
+        po.supplierGstin ?? "",
+        po.supplierCountry ?? "",
+        po.poType,
+        po.status,
+        po.currency ?? "INR",
+        Number(po.totalAmount ?? 0),
+        Number(po.taxAmount ?? 0),
+        Number(po.shippingAmount ?? 0),
+        `"${(warehouse?.name ?? "").replace(/"/g, '""')}"`,
+        po.expectedDeliveryDate ? po.expectedDeliveryDate.toISOString().split("T")[0] : "",
+        `"${(po.notes ?? "").replace(/"/g, '""')}"`,
+        po.createdAt instanceof Date ? po.createdAt.toISOString() : po.createdAt,
+      ];
+      csvRows.push(row.join(","));
+    }
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename=purchase_orders_export_${new Date().toISOString().split("T")[0]}.csv`);
+    res.send(csvRows.join("\n"));
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Failed to export purchase orders" });
+  }
+});
+
 // GET single PO with stages
 router.get("/:id", async (req, res) => {
   try {

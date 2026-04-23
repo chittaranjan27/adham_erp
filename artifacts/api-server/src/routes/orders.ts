@@ -3,7 +3,8 @@ import { db } from "@workspace/db";
 import { ordersTable, dealersTable, activitiesTable, inventoryTable } from "@workspace/db";
 import { eq, count, sql } from "drizzle-orm";
 import { releaseExpiredReservations } from "../lib/releaseExpiredReservations";
-import { pushSalesVoucher, pushSalesOrderVoucher, cancelTallyVoucher } from "../lib/tallyClient";
+import { pushSalesVoucher, pushSalesOrderVoucher, cancelTallyVoucher, pushReceiptVoucher } from "../lib/tallyClient";
+import type { OrderPricingData } from "../lib/tallyClient";
 
 const router = Router();
 
@@ -63,24 +64,95 @@ function validateOrderPayload(body: any): ValidationError[] {
     }
   }
 
+  // Pricing fields — optional but must be valid if provided
+  if (body.discountAmount !== undefined && body.discountAmount !== "" && body.discountAmount !== null) {
+    if (!isNonNegativeNumber(body.discountAmount)) {
+      errors.push({ field: "discountAmount", message: "Discount must be a non-negative number" });
+    }
+  }
+  if (body.shippingAmount !== undefined && body.shippingAmount !== "" && body.shippingAmount !== null) {
+    if (!isNonNegativeNumber(body.shippingAmount)) {
+      errors.push({ field: "shippingAmount", message: "Shipping must be a non-negative number" });
+    }
+  }
+  if (body.taxRate !== undefined && body.taxRate !== "" && body.taxRate !== null) {
+    const rate = Number(body.taxRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      errors.push({ field: "taxRate", message: "Tax rate must be between 0 and 100" });
+    }
+  }
+
   return errors;
+}
+
+// ─── Pricing calculator ──────────────────────────────────────────────────────
+
+function computePricing(body: any, subtotal: number) {
+  const discountAmount = isNonNegativeNumber(body.discountAmount) ? Number(body.discountAmount) : 0;
+  const shippingAmount = isNonNegativeNumber(body.shippingAmount) ? Number(body.shippingAmount) : 0;
+  const taxRate = isNonNegativeNumber(body.taxRate) ? Number(body.taxRate) : 0;
+  const taxType = body.taxType === "inter" ? "inter" : "intra";
+
+  const taxableAmount = subtotal - discountAmount;
+  let cgstAmount = 0;
+  let sgstAmount = 0;
+  let igstAmount = 0;
+
+  if (taxRate > 0 && taxableAmount > 0) {
+    if (taxType === "inter") {
+      igstAmount = Math.round(taxableAmount * taxRate / 100 * 100) / 100;
+    } else {
+      const halfRate = taxRate / 2;
+      cgstAmount = Math.round(taxableAmount * halfRate / 100 * 100) / 100;
+      sgstAmount = Math.round(taxableAmount * halfRate / 100 * 100) / 100;
+    }
+  }
+
+  const totalTax = cgstAmount + sgstAmount + igstAmount;
+  const grandTotal = taxableAmount + totalTax + shippingAmount;
+
+  return {
+    discountAmount,
+    shippingAmount,
+    taxRate,
+    taxType,
+    cgstAmount,
+    sgstAmount,
+    igstAmount,
+    grandTotal,
+  };
 }
 
 // ─── Format helper ───────────────────────────────────────────────────────────
 
 function formatOrder(order: any, dealer: any) {
   const items = (order.items as any[]) ?? [];
-  const totalAmount = Number(order.totalAmount);
+  const subtotal = items.reduce((sum: number, item: any) => sum + Number(item.unitPrice) * Number(item.quantity), 0);
   const advancePaid = Number(order.advancePaid ?? 0);
+
+  // Use grandTotal if available, otherwise fall back to totalAmount (legacy orders)
+  const grandTotal = Number(order.grandTotal ?? 0);
+  const effectiveTotal = grandTotal > 0 ? grandTotal : Number(order.totalAmount);
+
   return {
     id: order.id,
     orderNumber: order.orderNumber,
     dealerId: order.dealerId,
     dealerName: dealer?.name ?? "Unknown",
     status: order.status,
-    totalAmount,
+    totalAmount: Number(order.totalAmount),
     advancePaid,
-    balanceAmount: totalAmount - advancePaid,
+    balanceAmount: effectiveTotal - advancePaid,
+    // Pricing breakdown
+    subtotal,
+    discountAmount: Number(order.discountAmount ?? 0),
+    shippingAmount: Number(order.shippingAmount ?? 0),
+    taxRate: Number(order.taxRate ?? 0),
+    taxType: order.taxType ?? "intra",
+    cgstAmount: Number(order.cgstAmount ?? 0),
+    sgstAmount: Number(order.sgstAmount ?? 0),
+    igstAmount: Number(order.igstAmount ?? 0),
+    grandTotal: effectiveTotal,
     items: items.map((item: any) => ({
       productId: item.productId,
       productName: item.productName ?? "",
@@ -95,6 +167,31 @@ function formatOrder(order: any, dealer: any) {
     notes: order.notes ?? null,
     createdAt: order.createdAt.toISOString(),
     updatedAt: order.updatedAt.toISOString(),
+  };
+}
+
+// ─── Build OrderPricingData for Tally ────────────────────────────────────────
+
+function buildTallyPricing(order: any): OrderPricingData | undefined {
+  const taxRate = Number(order.taxRate ?? 0);
+  const grandTotal = Number(order.grandTotal ?? 0);
+
+  // If no tax/pricing data exists, don't send pricing to Tally
+  if (taxRate === 0 && grandTotal === 0) return undefined;
+
+  const items = (order.items as any[]) ?? [];
+  const subtotal = items.reduce((sum: number, item: any) => sum + Number(item.unitPrice) * Number(item.quantity), 0);
+
+  return {
+    subtotal,
+    discountAmount: Number(order.discountAmount ?? 0),
+    taxRate,
+    taxType: (order.taxType ?? "intra") as "intra" | "inter",
+    cgstAmount: Number(order.cgstAmount ?? 0),
+    sgstAmount: Number(order.sgstAmount ?? 0),
+    igstAmount: Number(order.igstAmount ?? 0),
+    shippingAmount: Number(order.shippingAmount ?? 0),
+    grandTotal: grandTotal > 0 ? grandTotal : Number(order.totalAmount),
   };
 }
 
@@ -174,9 +271,9 @@ router.post("/", async (req, res) => {
       unitPrice: Number(item.unitPrice),
     }));
 
-    const totalAmount = sanitisedItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+    const subtotal = sanitisedItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
 
-    if (!isPositiveNumber(totalAmount)) {
+    if (!isPositiveNumber(subtotal)) {
       return res.status(422).json({
         error: "Invalid order data",
         fields: ["Order total must be greater than 0"],
@@ -184,15 +281,18 @@ router.post("/", async (req, res) => {
       });
     }
 
-    if (advance > totalAmount) {
+    // 4. Compute pricing (tax, discount, shipping, grand total)
+    const pricing = computePricing(body, subtotal);
+
+    if (advance > pricing.grandTotal) {
       return res.status(422).json({
         error: "Invalid order data",
-        fields: [`Advance paid (₹${advance.toLocaleString("en-IN")}) cannot exceed total (₹${totalAmount.toLocaleString("en-IN")})`],
-        details: [{ field: "advancePaid", message: "Advance paid cannot exceed total amount" }],
+        fields: [`Advance paid (₹${advance.toLocaleString("en-IN")}) cannot exceed grand total (₹${pricing.grandTotal.toLocaleString("en-IN")})`],
+        details: [{ field: "advancePaid", message: "Advance paid cannot exceed grand total" }],
       });
     }
 
-    // 4. Create order
+    // 5. Create order
     const orderNumber = `ORD-${Date.now().toString().slice(-8)}`;
     const shouldReserve = advance > 0;
     const reservedUntil = shouldReserve ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : undefined;
@@ -200,16 +300,25 @@ router.post("/", async (req, res) => {
     const [order] = await db.insert(ordersTable).values({
       orderNumber,
       dealerId,
-      totalAmount: String(totalAmount),
+      totalAmount: String(subtotal),
       advancePaid: String(advance),
       items: JSON.parse(JSON.stringify(sanitisedItems)),
       status: shouldReserve ? "reserved" : "pending",
       isStockReserved: shouldReserve,
       reservedUntil,
       notes: body.notes ?? null,
+      // Pricing fields
+      discountAmount: String(pricing.discountAmount),
+      shippingAmount: String(pricing.shippingAmount),
+      taxRate: String(pricing.taxRate),
+      taxType: pricing.taxType,
+      cgstAmount: String(pricing.cgstAmount),
+      sgstAmount: String(pricing.sgstAmount),
+      igstAmount: String(pricing.igstAmount),
+      grandTotal: String(pricing.grandTotal),
     }).returning();
 
-    // 5. Best-effort stock reservation when advance is paid
+    // 6. Best-effort stock reservation when advance is paid
     if (shouldReserve) {
       for (const item of sanitisedItems) {
         try {
@@ -240,15 +349,15 @@ router.post("/", async (req, res) => {
       }
     }
 
-    // 6. Activity log
+    // 7. Activity log
     await db.insert(activitiesTable).values({
       type: "order",
-      description: `New order ${orderNumber} from ${dealer.name} — ${sanitisedItems.length} item(s) · ₹${totalAmount.toLocaleString("en-IN")}${shouldReserve ? " — stock reserved 7 days" : ""}`,
+      description: `New order ${orderNumber} from ${dealer.name} — ${sanitisedItems.length} item(s) · ₹${pricing.grandTotal.toLocaleString("en-IN")}${pricing.taxRate > 0 ? ` (GST ${pricing.taxRate}%)` : ""}${shouldReserve ? " — stock reserved 7 days" : ""}`,
       user: "Sales Team",
       status: "completed",
     });
 
-    // 7. Simulate WhatsApp notification
+    // 8. Simulate WhatsApp notification
     if (dealer.phone) {
       await db.insert(activitiesTable).values({
         type: "notification",
@@ -258,12 +367,13 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // 8. Auto-sync Sales Order to TallyPrime (fire-and-forget)
+    // 9. Auto-sync Sales Order to TallyPrime (fire-and-forget)
     pushSalesOrderVoucher({
       orderNumber,
       dealerName: dealer.name,
-      totalAmount,
+      totalAmount: subtotal,
       advancePaid: advance,
+      pricing: buildTallyPricing(order),
       items: sanitisedItems.map(item => ({
         productName: item.productName || `Product #${item.productId}`,
         quantity: item.quantity,
@@ -285,6 +395,30 @@ router.post("/", async (req, res) => {
         req.log.warn({ err, orderNumber }, "Tally Sales Order sync failed (non-fatal)");
       });
 
+    // 10. Auto-sync advance payment as Receipt Voucher to TallyPrime (fire-and-forget)
+    if (advance > 0) {
+      pushReceiptVoucher({
+        orderNumber,
+        dealerName: dealer.name,
+        amount: advance,
+        paymentReference: orderNumber,
+        date: new Date(),
+      })
+        .then(async (result) => {
+          await db.insert(activitiesTable).values({
+            type: "tally_sync",
+            description: result.success
+              ? `Tally Receipt Voucher created — Advance ₹${advance.toLocaleString("en-IN")} on order #${orderNumber}`
+              : `Tally advance sync FAILED for ${orderNumber} — ${result.message}`,
+            user: "System",
+            status: result.success ? "completed" : "rejected",
+          });
+        })
+        .catch((err) => {
+          req.log.warn({ err, orderNumber }, "Tally Receipt Voucher sync failed (non-fatal)");
+        });
+    }
+
     res.status(201).json(formatOrder(order, dealer));
   } catch (err: any) {
     req.log.error({ err: err?.message, stack: err?.stack }, "Order creation failed");
@@ -292,7 +426,57 @@ router.post("/", async (req, res) => {
   }
 });
 
-// ─── GET /orders/:id ──────────────────────────────────────────────────────────
+// GET /export/csv — export orders as CSV
+// IMPORTANT: Must be defined BEFORE /:id to avoid Express matching 'export' as a param
+router.get("/export/csv", async (req, res) => {
+  try {
+    const rows = await db
+      .select({ order: ordersTable, dealer: dealersTable })
+      .from(ordersTable)
+      .leftJoin(dealersTable, eq(ordersTable.dealerId, dealersTable.id))
+      .orderBy(sql`${ordersTable.createdAt} DESC`);
+
+    const headers = ["Order Number", "Dealer", "Status", "Subtotal", "Discount", "Tax Rate", "Tax Type", "CGST", "SGST", "IGST", "Shipping", "Grand Total", "Advance Paid", "Balance", "Items Count", "Stock Reserved", "Created At"];
+    const csvRows = [headers.join(",")];
+
+    for (const { order, dealer } of rows) {
+      const items = (order.items as any[]) ?? [];
+      const subtotal = items.reduce((sum: number, item: any) => sum + Number(item.unitPrice) * Number(item.quantity), 0);
+      const grandTotal = Number(order.grandTotal ?? order.totalAmount ?? 0);
+      const advance = Number(order.advancePaid ?? 0);
+
+      const row = [
+        order.orderNumber,
+        `"${(dealer?.name ?? "Unknown").replace(/"/g, '""')}"`,
+        order.status,
+        subtotal,
+        Number(order.discountAmount ?? 0),
+        Number(order.taxRate ?? 0),
+        order.taxType ?? "intra",
+        Number(order.cgstAmount ?? 0),
+        Number(order.sgstAmount ?? 0),
+        Number(order.igstAmount ?? 0),
+        Number(order.shippingAmount ?? 0),
+        grandTotal,
+        advance,
+        grandTotal - advance,
+        items.length,
+        order.isStockReserved ? "Yes" : "No",
+        order.createdAt instanceof Date ? order.createdAt.toISOString() : order.createdAt,
+      ];
+      csvRows.push(row.join(","));
+    }
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename=orders_export_${new Date().toISOString().split("T")[0]}.csv`);
+    res.send(csvRows.join("\n"));
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Failed to export orders" });
+  }
+});
+
+// ─── GET /orders/:id ────────────────────────────────────────────────────────────────
 router.get("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -345,7 +529,7 @@ router.patch("/:id", async (req, res) => {
       if (isNaN(d.getTime())) return res.status(422).json({ error: "Invalid deliveredAt date" });
       updates.deliveredAt = d;
     }
-    
+
     // Additional fields for editing incorrect data
     const { dealerId, notes, items } = req.body ?? {};
     if (dealerId !== undefined) {
@@ -359,6 +543,32 @@ router.patch("/:id", async (req, res) => {
       updates.items = items;
       const newItemsTotal = items.reduce((sum: number, item: any) => sum + (Number(item.quantity) * Number(item.unitPrice)), 0);
       updates.totalAmount = String(newItemsTotal);
+    }
+
+    // ─── Pricing fields update ──────────────────────────────────────────────────
+    const { discountAmount, shippingAmount, taxRate, taxType, cgstAmount, sgstAmount, igstAmount, grandTotal } = req.body ?? {};
+
+    if (discountAmount !== undefined) updates.discountAmount = String(Number(discountAmount) || 0);
+    if (shippingAmount !== undefined) updates.shippingAmount = String(Number(shippingAmount) || 0);
+    if (taxRate !== undefined) updates.taxRate = String(Number(taxRate) || 0);
+    if (taxType !== undefined) updates.taxType = taxType;
+    if (cgstAmount !== undefined) updates.cgstAmount = String(Number(cgstAmount) || 0);
+    if (sgstAmount !== undefined) updates.sgstAmount = String(Number(sgstAmount) || 0);
+    if (igstAmount !== undefined) updates.igstAmount = String(Number(igstAmount) || 0);
+    if (grandTotal !== undefined) updates.grandTotal = String(Number(grandTotal) || 0);
+
+    // If items changed and pricing fields are also provided, recompute pricing
+    if (items !== undefined && Array.isArray(items) && taxRate !== undefined) {
+      const newSubtotal = items.reduce((sum: number, item: any) => sum + (Number(item.quantity) * Number(item.unitPrice)), 0);
+      const recomputed = computePricing(req.body, newSubtotal);
+      updates.discountAmount = String(recomputed.discountAmount);
+      updates.shippingAmount = String(recomputed.shippingAmount);
+      updates.taxRate = String(recomputed.taxRate);
+      updates.taxType = recomputed.taxType;
+      updates.cgstAmount = String(recomputed.cgstAmount);
+      updates.sgstAmount = String(recomputed.sgstAmount);
+      updates.igstAmount = String(recomputed.igstAmount);
+      updates.grandTotal = String(recomputed.grandTotal);
     }
 
     const [order] = await db.update(ordersTable).set(updates).where(eq(ordersTable.id, id)).returning();
@@ -380,7 +590,7 @@ router.patch("/:id", async (req, res) => {
           voucherNumber: latestOrder.orderNumber,
           voucherType: "Sales",
           dealerName: tallyDealer?.name ?? "Unknown",
-          totalAmount: Number(latestOrder.totalAmount),
+          totalAmount: Number(latestOrder.grandTotal || latestOrder.totalAmount),
           reason: `Order ${latestOrder.orderNumber} cancelled from ERP`,
           date: new Date(),
         })
@@ -402,11 +612,14 @@ router.patch("/:id", async (req, res) => {
 
       const tallyDealer = await db.select().from(dealersTable).where(eq(dealersTable.id, latestOrder.dealerId)).then(r => r[0]);
       const orderItems = (latestOrder.items as any[]) ?? [];
+      const tallyPricing = buildTallyPricing(latestOrder);
+
       const voucherData = {
         orderNumber: latestOrder.orderNumber,
         dealerName: tallyDealer?.name ?? "Unknown",
         totalAmount: Number(latestOrder.totalAmount),
         advancePaid: Number(latestOrder.advancePaid ?? 0),
+        pricing: tallyPricing,
         items: orderItems.map((item: any) => ({
           productName: item.productName ?? `Product #${item.productId}`,
           quantity: Number(item.quantity),
@@ -536,3 +749,4 @@ router.patch("/:id", async (req, res) => {
 });
 
 export default router;
+

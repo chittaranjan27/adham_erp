@@ -11,6 +11,15 @@ export const ordersTable = pgTable("orders", {
   advancePaid: numeric("advance_paid", { precision: 12, scale: 2 }).default("0"),
   items: jsonb("items").notNull().default([]),
   notes: text("notes"),
+  // ─── Pricing & Tax fields ─────────────────────────────────────────────────
+  discountAmount: numeric("discount_amount", { precision: 12, scale: 2 }).default("0"),
+  shippingAmount: numeric("shipping_amount", { precision: 12, scale: 2 }).default("0"),
+  taxRate: numeric("tax_rate", { precision: 6, scale: 2 }).default("0"),     // GST % (e.g. 5, 12, 18, 28)
+  cgstAmount: numeric("cgst_amount", { precision: 12, scale: 2 }).default("0"),
+  sgstAmount: numeric("sgst_amount", { precision: 12, scale: 2 }).default("0"),
+  igstAmount: numeric("igst_amount", { precision: 12, scale: 2 }).default("0"),
+  taxType: text("tax_type").default("intra"),  // "intra" (CGST+SGST) or "inter" (IGST)
+  grandTotal: numeric("grand_total", { precision: 12, scale: 2 }).default("0"), // final payable amount
   // Stock reservation fields
   isStockReserved: boolean("is_stock_reserved").notNull().default(false),
   reservedUntil: timestamp("reserved_until"), // 7 days from order creation if advance paid
