@@ -59,9 +59,9 @@ router.post  ("/inventory/qc/:id",  requirePermission("write_inventory"));
 router.post  ("/grn",     requirePermission("write_inventory"));
 router.patch ("/grn/:id", requirePermission("approve_grn"));
 
-// Logistics dispatches — create & update require write_dispatch
+// Logistics dispatches — create requires write_dispatch
 router.post  ("/logistics/dispatches",     requirePermission("write_dispatch"));
-router.patch ("/logistics/dispatches/:id", requirePermission("write_dispatch"));
+// NOTE: PATCH /logistics/dispatches/:id permission is enforced inside the logistics router
 
 // Purchase orders — creating requires write_inventory (procurement)
 router.post  ("/purchase-orders",     requirePermission("write_inventory"));

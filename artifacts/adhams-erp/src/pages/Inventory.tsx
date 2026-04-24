@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { useListInventory, useListProducts, useListWarehouses, useCreateInventoryItem, ListInventoryStatus, customFetch } from "@workspace/api-client-react";
-import { Search, Filter, Plus, ScanLine, MoreVertical, CheckCircle2, XCircle, Warehouse, Upload, AlertCircle, X, ClipboardList, Lock, Edit, Trash2, Download } from "lucide-react";
+import { Search, Filter, Plus, ScanLine, MoreVertical, CheckCircle2, XCircle, Warehouse, Upload, AlertCircle, X, ClipboardList, Lock, Edit, Trash2, Download, ShieldCheck, ShieldX } from "lucide-react";
 import barcodeImg from "@assets/Barcode_scanning_1774437524977.png";
 import { useRole } from "@/context/RoleContext";
 import { useQueryClient } from "@tanstack/react-query";
@@ -32,6 +32,38 @@ export default function Inventory() {
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const { can } = useRole();
+
+  // QC Decision modal state
+  const [qcItem, setQcItem] = useState<any>(null);
+  const [qcDecision, setQcDecision] = useState<"accept" | "reject" | null>(null);
+  const [qcReason, setQcReason] = useState("");
+  const [qcNotes, setQcNotes] = useState("");
+  const [qcSubmitting, setQcSubmitting] = useState(false);
+
+  const handleQcSubmit = async () => {
+    if (!qcItem || !qcDecision) return;
+    if (qcDecision === "reject" && !qcReason.trim()) {
+      setToast({ type: "error", msg: "Rejection reason is required when failing QC." });
+      setTimeout(() => setToast(null), 4000);
+      return;
+    }
+    setQcSubmitting(true);
+    try {
+      await customFetch(`/api/inventory/qc/${qcItem.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: qcDecision, rejectionReason: qcReason || undefined, notes: qcNotes || undefined }),
+      });
+      setToast({ type: "success", msg: qcDecision === "accept" ? `✅ QC Passed — ${qcItem.productName} is now available for sale.` : `⚠️ QC Failed — ${qcItem.productName} has been quarantined.` });
+      setQcItem(null); setQcDecision(null); setQcReason(""); setQcNotes("");
+      queryClient.invalidateQueries();
+      setTimeout(() => setToast(null), 4000);
+    } catch (e: any) {
+      setToast({ type: "error", msg: e?.message || "Failed to submit QC decision." });
+      setTimeout(() => setToast(null), 4000);
+    }
+    setQcSubmitting(false);
+  };
 
   const handleDeleteItem = async (id: number, name: string) => {
     if (!confirm(`Delete inventory item "${name}"? This cannot be undone.`)) return;
@@ -305,6 +337,14 @@ export default function Inventory() {
                       </td>
                       <td className="px-6 py-4 text-center">
                         <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {item.status === "pending_qc" && can("inventory") && (
+                            <button
+                              onClick={() => { setQcItem(item); setQcDecision(null); setQcReason(""); setQcNotes(""); }}
+                              className="px-2.5 py-1.5 text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5" title="QC Decision"
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" /> QC Decision
+                            </button>
+                          )}
                           {can("inventory") && (
                             <button
                               onClick={() => handleDeleteItem(item.id, item.productName)}
@@ -449,6 +489,82 @@ export default function Inventory() {
                   {createInventory.isPending ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Saving...</> : <><CheckCircle2 className="w-5 h-5" /> Save to Inventory</>}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════ QC Decision Modal ══════ */}
+      {qcItem && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-card rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-6 border-b border-border">
+              <h2 className="text-lg font-bold font-display">QC Decision</h2>
+              <p className="text-sm text-muted-foreground mt-0.5">{qcItem.productName} — {qcItem.barcode}</p>
+              <p className="text-xs text-muted-foreground mt-1">Qty: {qcItem.quantity} · Warehouse: {qcItem.warehouseName}</p>
+            </div>
+            <div className="p-6 space-y-5">
+              {/* Decision buttons */}
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setQcDecision("accept")}
+                  className={`p-4 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${qcDecision === "accept" ? "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200" : "border-border hover:border-emerald-300 hover:bg-emerald-50/50"}`}
+                >
+                  <ShieldCheck className={`w-8 h-8 ${qcDecision === "accept" ? "text-emerald-600" : "text-muted-foreground"}`} />
+                  <span className={`text-sm font-bold ${qcDecision === "accept" ? "text-emerald-700" : "text-foreground"}`}>Pass QC</span>
+                  <span className="text-[10px] text-muted-foreground">Stock becomes available</span>
+                </button>
+                <button
+                  onClick={() => setQcDecision("reject")}
+                  className={`p-4 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${qcDecision === "reject" ? "border-red-500 bg-red-50 ring-2 ring-red-200" : "border-border hover:border-red-300 hover:bg-red-50/50"}`}
+                >
+                  <ShieldX className={`w-8 h-8 ${qcDecision === "reject" ? "text-red-600" : "text-muted-foreground"}`} />
+                  <span className={`text-sm font-bold ${qcDecision === "reject" ? "text-red-700" : "text-foreground"}`}>Fail QC</span>
+                  <span className="text-[10px] text-muted-foreground">Stock gets quarantined</span>
+                </button>
+              </div>
+
+              {/* Rejection reason (only when Fail) */}
+              {qcDecision === "reject" && (
+                <div>
+                  <label className="block text-sm font-medium mb-1.5">Rejection Reason <span className="text-red-500">*</span></label>
+                  <input
+                    value={qcReason}
+                    onChange={(e) => setQcReason(e.target.value)}
+                    placeholder="e.g. Surface damage, wrong dimensions..."
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+              )}
+
+              {/* Optional notes */}
+              <div>
+                <label className="block text-sm font-medium mb-1.5">Notes (optional)</label>
+                <textarea
+                  value={qcNotes}
+                  onChange={(e) => setQcNotes(e.target.value)}
+                  placeholder="Additional QC observations..."
+                  rows={2}
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 resize-none"
+                />
+              </div>
+            </div>
+            <div className="p-5 border-t border-border bg-muted/20 flex justify-end gap-3">
+              <button onClick={() => setQcItem(null)} className="px-5 py-2.5 font-medium rounded-xl hover:bg-muted transition-colors">Cancel</button>
+              <button
+                onClick={handleQcSubmit}
+                disabled={!qcDecision || qcSubmitting}
+                className={`px-6 py-2.5 font-semibold rounded-xl shadow-lg transition-all flex items-center gap-2 disabled:opacity-60 ${
+                  qcDecision === "reject" ? "bg-red-600 text-white hover:bg-red-700" : "bg-emerald-600 text-white hover:bg-emerald-700"
+                }`}
+              >
+                {qcSubmitting
+                  ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Submitting...</>
+                  : qcDecision === "reject"
+                    ? <><ShieldX className="w-5 h-5" /> Quarantine Stock</>
+                    : <><ShieldCheck className="w-5 h-5" /> Approve & Release Stock</>
+                }
+              </button>
             </div>
           </div>
         </div>

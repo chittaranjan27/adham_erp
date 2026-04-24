@@ -333,15 +333,28 @@ router.post("/qc/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { decision, rejectionReason, notes } = req.body;
-    const newStatus = decision === "accept" ? "available" : "quarantined";
+
+    if (!decision || !["accept", "reject"].includes(decision)) {
+      return res.status(400).json({ error: "decision must be 'accept' or 'reject'" });
+    }
+
+    // Fetch the current item first to read its quantity
+    const [existing] = await db.select().from(inventoryTable).where(eq(inventoryTable.id, id));
+    if (!existing) return res.status(404).json({ error: "Inventory item not found" });
+
+    const isAccepted = decision === "accept";
+    const newStatus = isAccepted ? "available" : "quarantined";
 
     const [item] = await db
       .update(inventoryTable)
       .set({
         status: newStatus,
         qcStatus: decision,
-        qcRejectionReason: rejectionReason,
-        qcNotes: notes,
+        qcRejectionReason: isAccepted ? null : (rejectionReason || null),
+        qcNotes: notes || null,
+        // On accept: make stock sellable. On reject: zero out saleable qty.
+        saleableQuantity: isAccepted ? existing.quantity : 0,
+        isGrnReleased: isAccepted,
         updatedAt: new Date(),
       })
       .where(eq(inventoryTable.id, id))
