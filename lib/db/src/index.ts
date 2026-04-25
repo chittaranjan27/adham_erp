@@ -4,13 +4,31 @@ import * as schema from "./schema";
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
+// Support two modes:
+// 1. Individual DB_* vars (recommended for passwords with special characters)
+// 2. Fallback to DATABASE_URL
+const useIndividualParams =
+  process.env.DB_HOST || process.env.DB_USER || process.env.DB_NAME;
+
+if (!useIndividualParams && !process.env.DATABASE_URL) {
   throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?",
+    "DATABASE_URL (or DB_HOST/DB_USER/DB_PASSWORD/DB_NAME) must be set. Did you forget to provision a database?",
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const poolConfig = useIndividualParams
+  ? {
+      host: process.env.DB_HOST || "127.0.0.1",
+      port: Number(process.env.DB_PORT || "5432"),
+      user: process.env.DB_USER || "postgres",
+      password: process.env.DB_PASSWORD || "",
+      database: process.env.DB_NAME || "adhams_erp",
+      ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false,
+    }
+  : { connectionString: process.env.DATABASE_URL };
+
+export const pool = new Pool(poolConfig);
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
+
