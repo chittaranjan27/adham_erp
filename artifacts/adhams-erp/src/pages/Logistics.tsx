@@ -27,7 +27,7 @@ export default function Logistics() {
   // Create Dispatch Modal
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ orderId: "", vehicleNumber: "", driverName: "", driverPhone: "", routePlan: "", dispatchDate: "" });
-  const [barcodeCheck, setBarcodeCheck] = useState<{ valid?: boolean; missingBarcodes?: string[]; loading?: boolean } | null>(null);
+  const [barcodeCheck, setBarcodeCheck] = useState<{ valid?: boolean; missingBarcodes?: string[]; loading?: boolean; totalItems?: number } | null>(null);
 
   // Deliver Modal
   const [deliverDispatch, setDeliverDispatch] = useState<any>(null);
