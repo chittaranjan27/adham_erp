@@ -58,7 +58,7 @@ console.log(
 module.exports = defineConfig({
   schema: "./src/schema/index.ts",
   dialect: "postgresql",
-  dbCredentials,
+  dbCredentials: /** @type {any} */ (dbCredentials),
   out: "./drizzle",
   verbose: true,
 });
