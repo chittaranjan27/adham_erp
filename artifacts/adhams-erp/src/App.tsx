@@ -2,7 +2,10 @@ import { useEffect } from "react";
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppLayout } from "@/components/Layout";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { RoleProvider, useRole } from "@/context/RoleContext";
+import { setAuthTokenGetter } from "@workspace/api-client-react";
+import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import Inventory from "@/pages/Inventory";
 import Products from "@/pages/Products";
@@ -70,32 +73,30 @@ function ProtectedRoute({
   );
 }
 
-function Router() {
+function AppRoutes() {
   return (
     <AppLayout>
       <Switch>
-        {/* Unguarded routes — accessible to all roles */}
+        {/* Dashboard — accessible to all authenticated roles */}
         <Route path="/" component={Dashboard} />
-        <Route path="/products" component={Products} />
-        <Route path="/orders" component={Orders} />
+
+        {/* All module routes — protected by role-based module access */}
+        <ProtectedRoute path="/products" component={Products} modulePath="/products" />
         <ProtectedRoute path="/orders/:id" component={OrderDetails} modulePath="/orders" />
-        <Route path="/warehouses" component={Warehouses} />
-        <Route path="/dealers" component={Dealers} />
-        <Route path="/finance" component={Finance} />
-        <Route path="/users" component={Users} />
-
-        {/* Protected routes — direct URL access blocked for unauthorised roles */}
-        <ProtectedRoute path="/inventory" component={Inventory} />
+        <ProtectedRoute path="/orders" component={Orders} modulePath="/orders" />
+        <ProtectedRoute path="/warehouses" component={Warehouses} modulePath="/warehouses" />
+        <ProtectedRoute path="/dealers" component={Dealers} modulePath="/dealers" />
+        <ProtectedRoute path="/finance" component={Finance} modulePath="/finance" />
+        <ProtectedRoute path="/users" component={Users} modulePath="/users" />
+        <ProtectedRoute path="/inventory/saleable" component={SaleableInventory} modulePath="/inventory/saleable" />
+        <ProtectedRoute path="/inventory" component={Inventory} modulePath="/inventory" />
         <ProtectedRoute path="/grn/partial" component={PartialGRN} modulePath="/grn" />
-        <ProtectedRoute path="/grn" component={GRN} />
-        <ProtectedRoute path="/logistics" component={Logistics} />
+        <ProtectedRoute path="/grn" component={GRN} modulePath="/grn" />
+        <ProtectedRoute path="/logistics" component={Logistics} modulePath="/logistics" />
         <ProtectedRoute path="/purchase-orders/new" component={CreatePurchaseOrder} modulePath="/purchase-orders" />
-        <ProtectedRoute path="/purchase-orders" component={PurchaseOrders} />
-        <ProtectedRoute path="/import-workflow" component={PurchaseOrders} modulePath="/import-workflow" />
+        <ProtectedRoute path="/purchase-orders" component={PurchaseOrders} modulePath="/purchase-orders" />
         <ProtectedRoute path="/import-workflow/:id" component={ImportWorkflow} modulePath="/import-workflow" />
-
-        {/* Sales-only view — has its own in-component guard as a second layer */}
-        <Route path="/inventory/saleable" component={SaleableInventory} />
+        <ProtectedRoute path="/import-workflow" component={PurchaseOrders} modulePath="/import-workflow" />
 
         <Route component={NotFound} />
       </Switch>
@@ -103,16 +104,50 @@ function Router() {
   );
 }
 
+/**
+ * Auth gate — shows the login page if not authenticated,
+ * or the loading spinner while checking the token.
+ */
+function AuthGate() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-[100dvh] flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
+          <p className="text-sm text-muted-foreground animate-pulse">Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Login />;
+  }
+
+  return (
+    <RoleProvider>
+      <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+        <AppRoutes />
+      </WouterRouter>
+    </RoleProvider>
+  );
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <RoleProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Router />
-        </WouterRouter>
-      </RoleProvider>
+      <AuthProvider>
+        <AuthGate />
+      </AuthProvider>
     </QueryClientProvider>
   );
 }
+
+// ─── Wire the auth token into the API client ─────────────────────────────────
+// This runs once at module load time. The getter reads the token from
+// localStorage on every API call, so it always picks up the latest value.
+setAuthTokenGetter(() => localStorage.getItem("adhams_token"));
 
 export default App;

@@ -12,17 +12,19 @@ import {
   ShieldCheck,
   Bell,
   Search,
-  ChevronDown,
   FileText,
   ClipboardList,
   Globe,
   PackageCheck,
   Menu,
   X,
+  LogOut,
+  KeyRound,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import logo from "@assets/Adhams_logo_1774437291858.jpg";
-import { useRole, ROLE_CONFIG, AppRole } from "@/context/RoleContext";
+import { useRole, ROLE_CONFIG } from "@/context/RoleContext";
+import { useAuth } from "@/context/AuthContext";
 
 const ALL_NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, group: "core" },
@@ -44,8 +46,11 @@ const ALL_NAV = [
 
 export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
-  const { role, setRole, permissions } = useRole();
+  const { role, permissions } = useRole();
+  const { logout, changePassword, user } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -60,6 +65,14 @@ export function AppLayout({ children }: { children: ReactNode }) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  // Close user menu on outside click
+  useEffect(() => {
+    if (!showUserMenu) return;
+    const handler = () => setShowUserMenu(false);
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [showUserMenu]);
 
   // Filter nav items by role permissions
   const coreNav = ALL_NAV.filter(
@@ -91,6 +104,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
       </Link>
     );
   };
+
+  const roleLabel = ROLE_CONFIG[role]?.label || role;
 
   const sidebarContent = (
     <>
@@ -134,9 +149,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
           <div className="w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-gradient-to-tr from-primary to-orange-400 flex items-center justify-center text-white font-bold shadow-inner shrink-0 text-sm lg:text-base">
             {permissions.initials}
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="text-sm font-medium truncate">{permissions.name}</p>
-            <p className="text-xs text-sidebar-foreground/60 truncate">{permissions.email}</p>
+            <p className="text-xs text-sidebar-foreground/60 truncate">{roleLabel}</p>
           </div>
         </div>
       </div>
@@ -212,22 +227,62 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-primary rounded-full ring-2 ring-card animate-pulse"></span>
             </button>
             <div className="hidden sm:block h-8 w-px bg-border"></div>
-            <div className="flex items-center gap-2 bg-muted/60 rounded-xl px-2 sm:px-3 py-1.5 border border-border">
-              <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-primary to-orange-400 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
-                {permissions.initials}
-              </div>
-              <div className="relative flex items-center gap-1">
-                <select
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as AppRole)}
-                  className="text-xs sm:text-sm font-medium bg-transparent border-none focus:ring-0 cursor-pointer hover:text-primary transition-colors appearance-none pr-4 max-w-[80px] sm:max-w-none"
-                >
-                  {(Object.keys(ROLE_CONFIG) as AppRole[]).map((r) => (
-                    <option key={r} value={r}>{ROLE_CONFIG[r].label}</option>
-                  ))}
-                </select>
-                <ChevronDown className="w-3.5 h-3.5 text-muted-foreground pointer-events-none absolute right-0" />
-              </div>
+
+            {/* User menu with logout */}
+            <div className="relative">
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowUserMenu(!showUserMenu); }}
+                className="flex items-center gap-2 bg-muted/60 rounded-xl px-2 sm:px-3 py-1.5 border border-border hover:border-primary/30 transition-colors"
+              >
+                <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-primary to-orange-400 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
+                  {permissions.initials}
+                </div>
+                <div className="hidden sm:block text-left">
+                  <p className="text-xs sm:text-sm font-medium leading-tight truncate max-w-[100px] lg:max-w-[140px]">
+                    {permissions.name}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground leading-tight truncate">
+                    {roleLabel}
+                  </p>
+                </div>
+              </button>
+
+              {/* Dropdown */}
+              <AnimatePresence>
+                {showUserMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -5, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -5, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 top-full mt-2 w-56 bg-popover border border-border rounded-xl shadow-xl shadow-black/10 overflow-hidden z-50"
+                  >
+                    <div className="p-3 border-b border-border/50">
+                      <p className="text-sm font-medium">{permissions.name}</p>
+                      <p className="text-xs text-muted-foreground">{user?.email}</p>
+                      <span className="inline-block mt-1 text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+                        {roleLabel}
+                      </span>
+                    </div>
+                    <div className="p-1">
+                      <button
+                        onClick={() => { setShowUserMenu(false); setShowPasswordModal(true); }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-foreground/80 hover:text-foreground hover:bg-muted rounded-lg transition-colors"
+                      >
+                        <KeyRound className="w-4 h-4" />
+                        Change Password
+                      </button>
+                      <button
+                        onClick={() => { setShowUserMenu(false); logout(); }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        Sign Out
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
         </header>
@@ -245,6 +300,137 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </motion.div>
         </main>
       </div>
+
+      {/* Change Password Modal */}
+      <ChangePasswordModal open={showPasswordModal} onClose={() => setShowPasswordModal(false)} />
+    </div>
+  );
+}
+
+// ─── Change Password Modal ────────────────────────────────────────────────────
+
+function ChangePasswordModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { changePassword } = useAuth();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const reset = () => {
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setError(null);
+    setSuccess(false);
+    setLoading(false);
+  };
+
+  const handleClose = () => {
+    reset();
+    onClose();
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (newPassword !== confirmPassword) {
+      setError("New passwords do not match");
+      return;
+    }
+    if (newPassword.length < 6) {
+      setError("New password must be at least 6 characters");
+      return;
+    }
+
+    setLoading(true);
+    const err = await changePassword(currentPassword, newPassword);
+    setLoading(false);
+
+    if (err) {
+      setError(err);
+    } else {
+      setSuccess(true);
+      setTimeout(handleClose, 1500);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={handleClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="relative bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6"
+      >
+        <h2 className="text-lg font-semibold mb-4">Change Password</h2>
+
+        {success ? (
+          <div className="p-4 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm text-center">
+            ✅ Password changed successfully!
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {error && (
+              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+                {error}
+              </div>
+            )}
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Current Password</label>
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                required
+                className="w-full px-3 py-2.5 bg-muted/50 border border-border rounded-xl text-sm focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">New Password</label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                required
+                minLength={6}
+                className="w-full px-3 py-2.5 bg-muted/50 border border-border rounded-xl text-sm focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Confirm New Password</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                minLength={6}
+                className="w-full px-3 py-2.5 bg-muted/50 border border-border rounded-xl text-sm focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={handleClose}
+                className="flex-1 py-2.5 rounded-xl border border-border text-sm font-medium hover:bg-muted transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                {loading ? "Saving..." : "Change Password"}
+              </button>
+            </div>
+          </form>
+        )}
+      </motion.div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, ReactNode } from "react";
-import { setRoleHeader } from "@workspace/api-client-react";
+import { createContext, useContext, ReactNode } from "react";
+import { useAuth } from "./AuthContext";
 
 export type AppRole =
   | "super_admin"
@@ -35,7 +35,7 @@ export const ROLE_CONFIG: Record<AppRole, RolePermissions> = {
     label: "Super Admin",
     initials: "SA",
     name: "Adhams Admin",
-    email: "admin@adhams.com",
+    email: "superadmin@adhams.com",
     modules: ALL_MODULES,
     canCreate: ["inventory", "products", "orders", "dealers", "users", "warehouses", "dispatches", "purchase_orders", "grn", "approve", "edit", "create"],
   },
@@ -123,7 +123,6 @@ export const ROLE_CONFIG: Record<AppRole, RolePermissions> = {
 
 interface RoleContextValue {
   role: AppRole;
-  setRole: (r: AppRole) => void;
   permissions: RolePermissions;
   can: (action: string) => boolean;
   hasModule: (path: string) => boolean;
@@ -131,37 +130,41 @@ interface RoleContextValue {
 
 const RoleContext = createContext<RoleContextValue | null>(null);
 
-const stored = localStorage.getItem("adhams_role") as AppRole | null;
-const defaultRole: AppRole =
-  stored && ROLE_CONFIG[stored] ? stored : "super_admin";
-
-// Always persist the resolved role so apiFetch (which reads localStorage
-// directly) always finds a valid value — even on first visit.
-if (!stored || !ROLE_CONFIG[stored]) {
-  localStorage.setItem("adhams_role", defaultRole);
-}
-
-// Initialise the X-Role header at module load time so the very first API
-// request already carries the correct role.
-setRoleHeader(defaultRole);
-
+/**
+ * RoleProvider — derives the active role from the authenticated user.
+ *
+ * Instead of a client-side dropdown, the role now comes from the JWT-
+ * authenticated user object in AuthContext. The ROLE_CONFIG lookup is
+ * overridden with the actual user name/email from the auth session.
+ */
 export function RoleProvider({ children }: { children: ReactNode }) {
-  const [role, setRoleState] = useState<AppRole>(defaultRole);
+  const { user } = useAuth();
 
-  const setRole = (r: AppRole) => {
-    localStorage.setItem("adhams_role", r);
-    setRoleState(r);
-    // Keep the API client header in sync with the role switcher.
-    setRoleHeader(r);
+  // Derive role from auth — fallback to super_admin only if no user (shouldn't happen,
+  // since this provider is rendered inside the auth gate)
+  const role: AppRole = (user?.role as AppRole) || "super_admin";
+
+  // Build permissions from ROLE_CONFIG, but override name/email with actual auth user
+  const basePermissions = ROLE_CONFIG[role] || ROLE_CONFIG.super_admin;
+  const permissions: RolePermissions = {
+    ...basePermissions,
+    name: user?.name || basePermissions.name,
+    email: user?.email || basePermissions.email,
+    initials: user?.name
+      ? user.name
+          .split(" ")
+          .map((w) => w[0])
+          .join("")
+          .toUpperCase()
+          .slice(0, 2)
+      : basePermissions.initials,
   };
-
-  const permissions = ROLE_CONFIG[role];
 
   const can = (action: string) => permissions.canCreate.includes(action);
   const hasModule = (path: string) => permissions.modules.includes(path);
 
   return (
-    <RoleContext.Provider value={{ role, setRole, permissions, can, hasModule }}>
+    <RoleContext.Provider value={{ role, permissions, can, hasModule }}>
       {children}
     </RoleContext.Provider>
   );

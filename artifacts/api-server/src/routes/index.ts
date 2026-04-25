@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
+import authRouter from "./auth";
 import dashboardRouter from "./dashboard";
 import inventoryRouter from "./inventory";
 import productsRouter from "./products";
@@ -14,12 +15,18 @@ import grnRouter from "./grn";
 import importWorkflowRouter from "./importWorkflow";
 import warehouseLocationsRouter from "./warehouseLocations";
 import tallyRouter from "./tally";
-import { requirePermission } from "../middlewares/rbac";
+import { requireAuth, requirePermission } from "../middlewares/rbac";
 
 const router: IRouter = Router();
 
-// ─── Public routes (no role required) ────────────────────────────────────────
+// ─── Public routes (no auth required) ────────────────────────────────────────
 router.use(healthRouter);
+router.use("/auth", authRouter);
+
+// ─── All routes below require JWT authentication ─────────────────────────────
+router.use(requireAuth);
+
+// ─── Read-access routes ──────────────────────────────────────────────────────
 router.use("/dashboard", dashboardRouter);
 router.use("/products", productsRouter);
 router.use("/warehouses", warehousesRouter);
@@ -29,19 +36,7 @@ router.use("/users", usersRouter);
 router.use("/warehouse-locations", warehouseLocationsRouter);
 router.use("/tally", tallyRouter);
 
-// ─── Protected routes — Step 1: authenticate (any valid role) ─────────────────
-// requirePermission("read") validates that X-Role is present and is a known role.
-// Every valid role has "read", so this acts as a pure authentication gate.
-router.use("/orders",          requirePermission("read"));
-router.use("/inventory",       requirePermission("read"));
-router.use("/grn",             requirePermission("read"));
-router.use("/logistics",       requirePermission("read"));
-router.use("/purchase-orders", requirePermission("read"));
-router.use("/import-workflow", requirePermission("read"));
-
-// ─── Protected routes — Step 2: authorise mutating operations ─────────────────
-// Middleware-only routes (no final handler) run the permission check, then call
-// next() to fall through to the actual router mounted below.
+// ─── Protected routes — write-permission gates for mutating operations ───────
 
 // Orders — create & update require write_orders
 router.post  ("/orders",     requirePermission("write_orders"));

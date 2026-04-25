@@ -11,7 +11,8 @@
     "build:prod": "NODE_ENV=production PORT=3000 BASE_PATH=/ pnpm --filter @workspace/api-server --filter @workspace/adhams-erp run build && cp -r artifacts/adhams-erp/dist/public artifacts/api-server/dist/public",
     "start": "node artifacts/api-server/dist/index.mjs",
     "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+    "seed:users": "pnpm --filter @workspace/scripts run seed:users"
   },
   "private": true,
   "devDependencies": {

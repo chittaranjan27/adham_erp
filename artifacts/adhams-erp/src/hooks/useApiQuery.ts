@@ -13,11 +13,14 @@ class ApiError extends Error {
 }
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  const role = localStorage.getItem("adhams_role") || "super_admin";
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", "X-Role": role, ...(opts?.headers ?? {}) },
-    ...opts,
-  });
+  const token = localStorage.getItem("adhams_token");
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(opts?.headers as Record<string, string> ?? {}),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${BASE}${path}`, { ...opts, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new ApiError(err.error ?? "Request failed", err, res.status);
