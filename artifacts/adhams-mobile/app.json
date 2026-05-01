@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "Adhams ERP",
+    "slug": "adhams-erp-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "scheme": "adhams-erp",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FF3C00"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.adhams.erp"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FF3C00"
+      },
+      "package": "com.adhams.erp",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Adhams ERP to access your camera for barcode scanning."
+        }
+      ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "13a1344c-c4bd-4183-9415-f96bdef35367"
+      }
+    }
+  }
+}
