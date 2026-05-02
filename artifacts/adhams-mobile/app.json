@@ -40,7 +40,15 @@
         {
           "cameraPermission": "Allow Adhams ERP to access your camera for barcode scanning."
         }
-      ]
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow Adhams ERP to access the microphone for Ask AI.",
+          "speechRecognitionPermission": "Allow Adhams ERP to securely recognize your voice for Ask AI."
+        }
+      ],
+      "expo-build-properties"
     ],
     "extra": {
       "router": {},

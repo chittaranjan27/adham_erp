@@ -89,6 +89,12 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="chat"
+        options={{
+          href: null, // Hide from tab bar — now accessible via home screen FAB
+        }}
+      />
+      <Tabs.Screen
         name="more"
         options={{
           tabBarIcon: ({ focused }) => (

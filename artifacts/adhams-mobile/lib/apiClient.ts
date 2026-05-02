@@ -28,6 +28,17 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
     },
   });
 
+  // Guard: if the response isn't JSON (e.g. an HTML 404 page from a proxy),
+  // throw a clear error instead of crashing on JSON.parse.
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new ApiError(
+      `Server returned non-JSON response (${contentType || 'unknown'}). The API endpoint may not be available.`,
+      res.status,
+      'NOT_JSON',
+    );
+  }
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new ApiError(
