@@ -15,7 +15,11 @@
 const TALLY_HOST = process.env.TALLY_HOST ?? "localhost";
 const TALLY_PORT = process.env.TALLY_PORT ?? "9000";
 const TALLY_COMPANY = process.env.TALLY_COMPANY ?? "Adhams Building Solutions";
-const TALLY_URL = `http://${TALLY_HOST}:${TALLY_PORT}`;
+
+// Smart URL construction to handle full Ngrok/HTTPS URLs properly
+const TALLY_URL = TALLY_HOST.startsWith("http") 
+  ? TALLY_HOST 
+  : `http://${TALLY_HOST}:${TALLY_PORT}`;
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
@@ -276,6 +280,48 @@ export async function ensureTallyLedgers(): Promise<void> {
   console.log("[Tally] Ledger setup complete.");
 }
 
+// ─── Auto-create Party Ledgers ────────────────────────────────────────────────
+
+/**
+ * Ensure a party ledger exists in Tally before pushing a voucher.
+ */
+export async function ensurePartyLedger(partyName: string, parentGroup: "Sundry Debtors" | "Sundry Creditors" = "Sundry Debtors"): Promise<void> {
+  console.log(`[Tally] Ensuring party ledger exists: ${partyName} under ${parentGroup}`);
+  const xml = `
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(TALLY_COMPANY)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <LEDGER NAME="${escapeXml(partyName)}" ACTION="Create">
+            <NAME>${escapeXml(partyName)}</NAME>
+            <PARENT>${escapeXml(parentGroup)}</PARENT>
+          </LEDGER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+  const result = await sendToTally(xml);
+  if (result.success) {
+    console.log(`[Tally] ✓ Party ledger created/verified: ${partyName}`);
+  } else if (result.message.includes("already exists") || result.message.includes("Duplicate")) {
+    console.log(`[Tally] ✓ Party ledger already exists: ${partyName}`);
+  } else {
+    console.log(`[Tally] ⚠ Could not create party ledger ${partyName}: ${result.message}`);
+  }
+}
+
 // ─── Tax Ledger Entry Builder ───────────────────────────────────────────────────
 
 /**
@@ -380,6 +426,8 @@ export async function checkTallyConnection(): Promise<TallyResponse> {
 export async function pushSalesVoucher(data: SalesVoucherData): Promise<TallyResponse> {
   // Ensure GST ledgers exist before creating the voucher
   await ensureTallyLedgers();
+  // Ensure the dealer (Party) ledger exists
+  await ensurePartyLedger(data.dealerName, "Sundry Debtors");
 
   const date = tallyDate(data.date);
   const dealerName = escapeXml(data.dealerName);
@@ -514,6 +562,9 @@ export async function pushSalesVoucher(data: SalesVoucherData): Promise<TallyRes
  *  - Debits the Purchase Account
  */
 export async function pushPurchaseVoucher(data: PurchaseVoucherData): Promise<TallyResponse> {
+  // Ensure the supplier (Party) ledger exists
+  await ensurePartyLedger(data.supplierName, "Sundry Creditors");
+
   const date = tallyDate(data.date);
   const supplierName = escapeXml(data.supplierName);
   const narration = escapeXml(
@@ -588,6 +639,9 @@ export async function pushPurchaseVoucher(data: PurchaseVoucherData): Promise<Ta
  * Push a Receipt Voucher to Tally when advance payment is recorded on an order.
  */
 export async function pushReceiptVoucher(data: ReceiptVoucherData): Promise<TallyResponse> {
+  // Ensure the dealer (Party) ledger exists
+  await ensurePartyLedger(data.dealerName, "Sundry Debtors");
+
   const date = tallyDate(data.date);
   const dealerName = escapeXml(data.dealerName);
   const narration = escapeXml(
@@ -693,6 +747,8 @@ export async function getDealerOutstanding(dealerName: string): Promise<{
 export async function pushSalesOrderVoucher(data: SalesOrderData): Promise<TallyResponse> {
   // Ensure GST ledgers exist before creating the voucher
   await ensureTallyLedgers();
+  // Ensure the dealer (Party) ledger exists
+  await ensurePartyLedger(data.dealerName, "Sundry Debtors");
 
   const date = tallyDate(data.date);
   const dealerName = escapeXml(data.dealerName);
